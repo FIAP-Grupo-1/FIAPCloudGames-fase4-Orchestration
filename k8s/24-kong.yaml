@@ -1,0 +1,150 @@
+# API Gateway (Kong) em modo DB-less.
+#
+# As rotas vem do ConfigMap kong-declarative (k8s/03-kong-config.yaml), que e
+# GERADO de kong/kong.yml -- o mesmo arquivo que o docker-compose monta. Para
+# mudar rota/plugin: edite kong/kong.yml e rode `make kong-config`.
+#
+# Escopo atual: users-api, catalog-api e payments-api, mais as duas funcoes do
+# NotificationsAPI rodando no emulador da Lambda -- so local (ver kong/kong.yml).
+#
+# O Kong le a config declarativa UMA VEZ, no startup. Trocar o ConfigMap nao
+# recarrega os pods sozinho -- por isso o scripts/k8s/deploy.sh grava o hash da
+# config numa annotation do pod template, o que faz o Deployment rolar quando
+# (e somente quando) kong/kong.yml muda.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kong
+  namespace: fcg
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: kong }
+  template:
+    metadata:
+      labels: { app: kong }
+      annotations:
+        # Deixa o Prometheus achar o /metrics do gateway quando a frente de
+        # observabilidade entrar (o plugin prometheus ja esta habilitado).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8100"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: kong
+          image: kong:3.9
+          imagePullPolicy: IfNotPresent
+          # Wrapper que injeta o segredo/issuer no YAML declarativo e depois
+          # chama o entrypoint oficial (/docker-entrypoint.sh kong docker-start).
+          command: ["/bin/sh", "/kong/declarative/render-and-start.sh"]
+          args: ["kong", "docker-start"]
+          ports:
+            # A Admin API (8001) NAO aparece aqui de proposito: ela escuta
+            # apenas em 127.0.0.1 dentro do pod (ver KONG_ADMIN_LISTEN).
+            - { name: proxy, containerPort: 8000 }
+            - { name: status, containerPort: 8100 }
+          env:
+            - name: KONG_DATABASE
+              value: "off"
+            - name: KONG_PROXY_LISTEN
+              value: "0.0.0.0:8000"
+            # A Admin API do DB-less e read-only, mas devolve a credencial JWT
+            # JA RESOLVIDA (GET /consumers/fcg-users-api/jwt mostra o segredo em
+            # texto). Presa no loopback do pod, so quem tem `kubectl exec` chega
+            # nela -- nenhum outro pod do cluster consegue.
+            - name: KONG_ADMIN_LISTEN
+              value: "127.0.0.1:8001"
+            - name: KONG_STATUS_LISTEN
+              value: "0.0.0.0:8100"
+            - name: KONG_PROXY_ACCESS_LOG
+              value: /dev/stdout
+            - name: KONG_PROXY_ERROR_LOG
+              value: /dev/stderr
+            - name: KONG_ADMIN_ACCESS_LOG
+              value: /dev/stdout
+            - name: KONG_ADMIN_ERROR_LOG
+              value: /dev/stderr
+            # Mantem o X-Kong-*-Latency (util para observabilidade) e derruba o
+            # `Server: kong/3.9`, que so serve para anunciar a versao.
+            - name: KONG_HEADERS
+              value: "latency_tokens"
+            # Atras do Ingress, o peer TCP do Kong e sempre o pod do
+            # ingress-nginx: sem isso, o rate-limiting por IP contaria TODO o
+            # trafego externo como um unico cliente e um usuario esbarrando no
+            # limite do login derrubaria o login de todos.
+            #
+            # trusted_ips = faixas privadas (o proxy do cluster). Fora delas o
+            # Kong ignora o cabecalho.
+            - name: KONG_TRUSTED_IPS
+              value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+            - name: KONG_REAL_IP_HEADER
+              value: "X-Forwarded-For"
+            # "off" = usa a ULTIMA entrada do X-Forwarded-For, que e a que o
+            # ingress-nginx acabou de acrescentar. Com "on" o Kong andaria a
+            # lista da direita para a esquerda e passaria a aceitar o trecho
+            # que o CLIENTE mandou -- ou seja, daria para burlar o limite por
+            # IP so mandando um X-Forwarded-For falso.
+            - name: KONG_REAL_IP_RECURSIVE
+              value: "off"
+            # Claim `iss` esperada nos tokens do users-api (mesma key que o
+            # Deployment users-api usa em JwtSettings__Issuer).
+            - name: JWT_ISSUER
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: JWT_ISSUER } }
+            # Mesmo segredo HMAC de users-api (emite) e catalog-api (valida).
+            # O render-and-start.sh escreve o valor no YAML renderizado e da
+            # `unset` antes de subir o Kong, para o segredo nao ficar em
+            # /proc/1/environ.
+            - name: JWT_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: JwtSettings__SecretKey } }
+          # /status/ready so responde 200 depois que a config declarativa carregou.
+          readinessProbe:
+            httpGet: { path: /status/ready, port: 8100 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /status, port: 8100 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          # O gateway e a unica porta de entrada: vale apertar o que da.
+          # Nao usamos readOnlyRootFilesystem porque o Kong escreve o prefixo
+          # (nginx.conf, sockets, pids) e o YAML renderizado em disco.
+          #
+          # runAsUser precisa ser NUMERICO: a imagem oficial declara o usuario
+          # por nome (`USER kong`) e, nesse caso, o kubelet nao consegue provar
+          # que ele nao e root e recusa o pod com runAsNonRoot ligado.
+          # 1001 = uid do usuario `kong` na kong:3.9.
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            capabilities:
+              drop: ["ALL"]          # as portas usadas sao > 1024
+          volumeMounts:
+            - name: kong-declarative
+              mountPath: /kong/declarative
+              readOnly: true
+      volumes:
+        - name: kong-declarative
+          configMap:
+            name: kong-declarative
+            defaultMode: 0555
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong-proxy
+  namespace: fcg
+spec:
+  type: ClusterIP
+  selector: { app: kong }
+  ports:
+    - name: proxy
+      port: 8000
+      targetPort: 8000
+    - name: status        # /metrics para o Prometheus (nao expor no Ingress)
+      port: 8100
+      targetPort: 8100

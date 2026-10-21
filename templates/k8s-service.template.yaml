@@ -1,0 +1,46 @@
+# Modelo da pasta /k8s de cada repo de servico.
+# Substitua <SERVICE> pelo nome (users-api, catalog-api, ...).
+# Ajuste variáveis (ConfigMap/Secret) e a sonda (TCP se não houver /health; HTTP se houver).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: <SERVICE>
+  namespace: fcg
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: <SERVICE> }
+  template:
+    metadata:
+      labels: { app: <SERVICE> }
+    spec:
+      containers:
+        - name: <SERVICE>
+          image: fcg/<SERVICE>:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: ASPNETCORE_ENVIRONMENT } }
+            # ... demais variaveis do ConfigMap/Secret conforme o servico ...
+          readinessProbe:
+            tcpSocket: { port: 8080 }      # troque por httpGet /health se o servico expor
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: <SERVICE>
+  namespace: fcg
+spec:
+  type: ClusterIP
+  selector: { app: <SERVICE> }
+  ports:
+    - port: 8080
+      targetPort: 8080

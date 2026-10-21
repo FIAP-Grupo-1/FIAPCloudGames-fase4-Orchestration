@@ -1,0 +1,32 @@
+# Variaveis reais do Compose (nunca comitar)
+.env
+.env.*
+!.env.example
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+
+# IDEs
+.vs/
+.idea/
+*.sln.iml
+
+# Logs
+*.log
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.secret.yaml
+secrets.yaml
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl

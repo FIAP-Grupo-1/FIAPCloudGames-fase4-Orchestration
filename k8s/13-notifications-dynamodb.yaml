@@ -1,0 +1,83 @@
+# DynamoDB Local para o NotificationsAPI -- SOMENTE LOCAL.
+#
+# Em producao a tabela fcg-notifications e provisionada pelo template.yaml (SAM)
+# do repo do NotificationsAPI e nada deste arquivo existe la. Aqui ela serve as
+# duas funcoes rodando no emulador da Lambda (k8s/23-notifications.yaml).
+#
+# Um pod, dois containers:
+#   - dynamodb:   o DynamoDB Local, em memoria.
+#   - init-table: cria a tabela na subida (notifications-local/init-dynamodb.sh)
+#                 e fica de pe. A readiness dele so passa quando a tabela existe,
+#                 entao pod Ready = tabela pronta. Como o banco e em memoria, a
+#                 tabela some a cada recriacao do pod -- e e recriada junto.
+#
+# O script chega por um ConfigMap GERADO do arquivo pelo scripts/k8s/deploy.sh
+# (mesma ideia do ConfigMap do Kong: uma fonte so). O deploy.sh tambem rola este
+# Deployment quando o script muda, porque ele so roda na subida do pod.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifications-dynamodb
+  namespace: fcg
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: notifications-dynamodb }
+  template:
+    metadata:
+      labels: { app: notifications-dynamodb }
+    spec:
+      containers:
+        - name: dynamodb
+          image: amazon/dynamodb-local:latest
+          # -sharedDb: sem ele o DynamoDB Local separa as tabelas por access
+          # key/regiao, e a funcao nao enxergaria a tabela criada pelo init.
+          args: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            tcpSocket: { port: 8000 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+        - name: init-table
+          image: amazon/aws-cli:latest
+          command: ["sh", "/init/init-dynamodb.sh", "--keep-alive"]
+          env:
+            # Mesmo pod: o DynamoDB esta no localhost.
+            - name: DYNAMODB_ENDPOINT
+              value: "http://localhost:8000"
+            # A sonda abaixo roda o CLI fora do script, entao precisa das
+            # credenciais ficticias no ambiente do container.
+            - name: AWS_ACCESS_KEY_ID
+              value: "local"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "local"
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+            - name: AWS_PAGER
+              value: ""
+          readinessProbe:
+            exec:
+              command: ["aws", "dynamodb", "describe-table", "--table-name", "fcg-notifications",
+                        "--endpoint-url", "http://localhost:8000"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 8
+          volumeMounts:
+            - name: init
+              mountPath: /init
+      volumes:
+        - name: init
+          configMap:
+            name: notifications-dynamodb-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notifications-dynamodb
+  namespace: fcg
+spec:
+  selector: { app: notifications-dynamodb }
+  ports:
+    - port: 8000
+      targetPort: 8000

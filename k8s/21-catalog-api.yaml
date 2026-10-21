@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-api
+  namespace: fcg
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: catalog-api }
+  template:
+    metadata:
+      labels: { app: catalog-api }
+    spec:
+      containers:
+        - name: catalog-api
+          image: fcg/catalog-api:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: ASPNETCORE_ENVIRONMENT } }
+            # Catálogo lê a seção `RabbitMq:` como todo mundo -- as mesmas keys do
+            # payments-api. (Ele já usou uma URI amqp:// em `ConnectionStrings`; se
+            # voltar a injetar só aquela, o app cai no guest/pass do appsettings.json
+            # e o broker recusa a conexão com ACCESS_REFUSED.)
+            - name: RabbitMq__Host
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: RabbitMq__Host } }
+            - name: RabbitMq__Port
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: RabbitMq__Port } }
+            - name: RabbitMq__Username
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: RabbitMq__Username } }
+            - name: RabbitMq__VirtualHost
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: RabbitMq__VirtualHost } }
+            - name: RabbitMq__Password
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: RabbitMq__Password } }
+            - name: JwtSettings__SecretKey
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: JwtSettings__SecretKey } }
+            - name: ConnectionStrings__DefaultConnection
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: Catalog__ConnectionString } }
+            # Cache das leituras de jogos/biblioteca (k8s/12-redis.yaml). Sem esta
+            # variável o app tenta localhost:6379 e devolve 500 em toda leitura.
+            - name: ConnectionStrings__Redis
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: Catalog__RedisConnection } }
+            # Ativa o profiler do CLR. Sem estas 4 variaveis o pacote NewRelic.Agent
+            # fica instalado em /app/newrelic mas NUNCA e carregado (agente inerte).
+            # O GUID precisa de aspas: sem elas o YAML leria {..} como um mapa.
+            - name: CORECLR_ENABLE_PROFILING
+              value: "1"
+            - name: CORECLR_PROFILER
+              value: "{36032161-FFC0-4B61-B559-F6C5D41BAE5A}"
+            - name: CORECLR_NEWRELIC_HOME
+              value: /app/newrelic
+            - name: CORECLR_PROFILER_PATH
+              value: /app/newrelic/libNewRelicProfiler.so
+            - name: NEW_RELIC_LICENSE_KEY
+              valueFrom: { secretKeyRef: { name: new-relic, key: license-key } }
+            - name: NEW_RELIC_APP_NAME
+              value: "FIAPCloudGames-fase3-CatalogAPI"
+            - name: NEW_RELIC_DISTRIBUTED_TRACING_ENABLED
+              value: "true"
+            - name: NEW_RELIC_APPLICATION_LOGGING_ENABLED
+              value: "true"
+            - name: NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED
+              value: "true"
+          # Catálogo não expõe /health: sonda TCP na porta 8080.
+          livenessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-api
+  namespace: fcg
+spec:
+  type: ClusterIP
+  selector: { app: catalog-api }
+  ports:
+    - port: 8080
+      targetPort: 8080

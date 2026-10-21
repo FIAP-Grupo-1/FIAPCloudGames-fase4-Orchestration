@@ -1,0 +1,316 @@
+# docker-compose unificado da FCG Fase 3 (base Fase 2 + novos componentes a adicionar).
+# Sobe a infraestrutura (RabbitMQ + PostgreSQL com 2 bancos) e os 3 microsservicos HTTP.
+# Em producao o NotificationsAPI e uma funcao AWS Lambda (SNS + SQS), acionada sob
+# demanda em vez de um container 24/7 -- deploy via `sam deploy` no repo dele.
+# Localmente, o MESMO codigo roda aqui na imagem oficial da Lambda, para ser
+# testado pelo gateway: ver o bloco NOTIFICATIONS abaixo e a secao
+# "NotificationsAPI local (via Kong)" do README.md.
+#
+# RabbitMQ ainda existe aqui para o fluxo Catalog -> Payments (OrderPlacedEvent) e para
+# Payments -> Catalog (PaymentProcessedEvent, que libera o jogo na biblioteca). A Lambda
+# de notificacoes e acionada via SNS: users-api publica UserRegisteredEvent so por SNS;
+# payments-api publica PaymentProcessedEvent nos DOIS transportes (RabbitMQ + SNS), pois
+# tem dois consumidores independentes. SNS exige credenciais AWS reais nas variaveis
+# AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION (ver .env.example); sem elas, so
+# essa publicacao falha silenciosamente (log de warning) e o resto do fluxo HTTP/RabbitMQ
+# continua normal.
+#
+# Na frente dos servicos roda o API Gateway (Kong, DB-less),
+# unico ponto de entrada em http://localhost:8000 -- ver a secao
+# "API Gateway (Kong)" do README.md.
+# Uso:  docker-compose up --build
+#
+# Caminhos dos repos de servico (pastas irmaas deste repo).
+# Defaults = nomes gerados pelo `git clone` no GitHub. Se renomeou as pastas, ajuste no .env.
+#   USERS_API_PATH=../fcg-users-api  (exemplo)
+
+# Base comum das duas funcoes do NotificationsAPI (SOMENTE LOCAL): mesma imagem,
+# mesmo ambiente -- so o handler muda, como no template.yaml.
+x-notifications-lambda: &notifications-lambda
+  build:
+    # O Dockerfile mora neste repo; o codigo vem do repo irmao por um contexto
+    # nomeado. Assim nada e escrito no repo do NotificationsAPI.
+    context: ./notifications-local
+    additional_contexts:
+      notificationsapi: ${NOTIFICATIONS_API_PATH:-../FIAPCloudGames-fase3-NotificationsAPI}/NotificationsAPI
+  image: fcg/notifications-lambda:local
+  environment:
+    DynamoDb__ServiceUrl: http://notifications-dynamodb:8000
+    DynamoDb__TableName: fcg-notifications
+    # O SDK da AWS exige credencial e regiao mesmo falando com o DynamoDB Local,
+    # que roda com -sharedDb e as ignora. Ficticias DE PROPOSITO: nunca herdar
+    # as chaves reais do .env aqui.
+    AWS_ACCESS_KEY_ID: local
+    AWS_SECRET_ACCESS_KEY: local
+    AWS_REGION: us-east-1
+    # Telemetry.cs aborta a funcao sem esta variavel. Com o placeholder os traces
+    # sao recusados pelo New Relic, sem afetar a execucao.
+    NEW_RELIC_LICENSE_KEY: local-dev-placeholder
+  depends_on:
+    notifications-dynamodb-init: { condition: service_completed_successfully }
+
+services:
+  # ---------- INFRAESTRUTURA ----------
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-fcg}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-fcg123}
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # Painel web: http://localhost:15672 (fcg/fcg123)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fcg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fcg123}
+      POSTGRES_DB: fcgdb            # banco do users; catalog/payments vem do init.sql
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fcg}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Cache de leitura do catalog-api (GET de jogos e da biblioteca passam por ele).
+  # Sem este servico o catalog-api cai no default do appsettings (localhost:6379)
+  # e devolve 500 em toda leitura. ACL com usuario nomeado porque a connection
+  # string do StackExchange.Redis manda `user=...`; `default off` fecha o anonimo.
+  # Sem volume: e cache, o conteudo e descartavel e se repopula na primeira leitura.
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --user default off
+      --user ${REDIS_USER:-fcg} on ">${REDIS_PASS:-fcg123}" "~*" "&*" "+@all"
+      --save ""
+      --appendonly no
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--user", "${REDIS_USER:-fcg}", "--pass", "${REDIS_PASS:-fcg123}", "--no-auth-warning", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------- SERVICOS ----------
+  users-api:
+    build:
+      context: ${USERS_API_PATH:-../FIAPCloudGames-fase3-UsersAPI}
+      dockerfile: src/FCG.API/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=fcgdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:-fcg123}"
+      JwtSettings__SecretKey: ${JWT_SECRET_KEY:-6a8a56f4d31a272d6e2f048f710c9cce45b51aa343fd6f73d8b69f1218eaac56}
+      JwtSettings__ExpirationHours: "4"
+      # Claim `iss` do token. O gateway (Kong) valida exatamente este valor -
+      # por isso os dois leem a MESMA variavel JWT_ISSUER.
+      JwtSettings__Issuer: ${JWT_ISSUER:-FCG}
+      # UserRegisteredEvent vai por SNS (consumido pela Lambda do NotificationsAPI),
+      # não mais pelo RabbitMQ. Exige credenciais AWS reais no ambiente; sem elas a
+      # publicação falha silenciosamente (log de warning) e o cadastro continua normal.
+      Sns__TopicArn: ${SNS_USER_EVENTS_TOPIC_ARN:-arn:aws:sns:us-east-1:450753703903:fcg-user-events}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # Ativa o profiler do CLR -- sem estas 4 variaveis o pacote NewRelic.Agent
+      # fica instalado em /app/newrelic mas NUNCA e carregado (agente inerte).
+      CORECLR_ENABLE_PROFILING: "1"
+      CORECLR_PROFILER: "{36032161-FFC0-4B61-B559-F6C5D41BAE5A}"
+      CORECLR_NEWRELIC_HOME: /app/newrelic
+      CORECLR_PROFILER_PATH: /app/newrelic/libNewRelicProfiler.so
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
+      NEW_RELIC_APP_NAME: FIAPCloudGames-fase3-UsersAPI
+      NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
+      NEW_RELIC_APPLICATION_LOGGING_ENABLED: "true"
+      NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED: "true"
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  catalog-api:
+    build:
+      context: ${CATALOG_API_PATH:-../FIAPCloudGames-fase3-CatalogAPI}
+      dockerfile: src/CatalogAPI.API/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Host=postgres;Database=catalogdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:-fcg123}"
+      # Cache das leituras de jogos/biblioteca. `abortConnect=false` deixa o app subir
+      # mesmo com o Redis ainda fora do ar (reconecta sozinho).
+      ConnectionStrings__Redis: "redis:6379,user=${REDIS_USER:-fcg},password=${REDIS_PASS:-fcg123},abortConnect=false"
+      # Catalogo le a secao `RabbitMq:`, as mesmas keys do payments-api. Injetar so a
+      # URI em ConnectionStrings__RabbitMqConnection faz o app usar o guest/pass do
+      # appsettings.json e o broker recusa com ACCESS_REFUSED.
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Port: "5672"
+      RabbitMq__Username: ${RABBITMQ_USER:-fcg}
+      RabbitMq__Password: ${RABBITMQ_PASS:-fcg123}
+      RabbitMq__VirtualHost: "/"
+      JwtSettings__SecretKey: ${JWT_SECRET_KEY:-6a8a56f4d31a272d6e2f048f710c9cce45b51aa343fd6f73d8b69f1218eaac56}
+      # Ativa o profiler do CLR -- sem estas 4 variaveis o pacote NewRelic.Agent
+      # fica instalado em /app/newrelic mas NUNCA e carregado (agente inerte).
+      CORECLR_ENABLE_PROFILING: "1"
+      CORECLR_PROFILER: "{36032161-FFC0-4B61-B559-F6C5D41BAE5A}"
+      CORECLR_NEWRELIC_HOME: /app/newrelic
+      CORECLR_PROFILER_PATH: /app/newrelic/libNewRelicProfiler.so
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
+      NEW_RELIC_APP_NAME: FIAPCloudGames-fase3-CatalogAPI
+      NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
+      NEW_RELIC_APPLICATION_LOGGING_ENABLED: "true"
+      NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED: "true"
+    ports:
+      - "8082:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  payments-api:
+    build:
+      context: ${PAYMENTS_API_PATH:-../FIAPCloudGames-fase3-PaymentsAPI}
+      dockerfile: src/FCG.API/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=paymentsdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:-fcg123}"
+      # RabbitMQ: consome OrderPlacedEvent do CatalogAPI e publica PaymentProcessedEvent
+      # de volta (adiciona o jogo à biblioteca se aprovado).
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Port: "5672"
+      RabbitMq__Username: ${RABBITMQ_USER:-fcg}
+      RabbitMq__Password: ${RABBITMQ_PASS:-fcg123}
+      RabbitMq__VirtualHost: "/"
+      # SNS: publica o MESMO PaymentProcessedEvent para a Lambda do NotificationsAPI.
+      Sns__TopicArn: ${SNS_PAYMENT_EVENTS_TOPIC_ARN:-arn:aws:sns:us-east-1:450753703903:fcg-payment-events}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # Ativa o profiler do CLR -- sem estas 4 variaveis o pacote NewRelic.Agent
+      # fica instalado em /app/newrelic mas NUNCA e carregado (agente inerte).
+      CORECLR_ENABLE_PROFILING: "1"
+      CORECLR_PROFILER: "{36032161-FFC0-4B61-B559-F6C5D41BAE5A}"
+      CORECLR_NEWRELIC_HOME: /app/newrelic
+      CORECLR_PROFILER_PATH: /app/newrelic/libNewRelicProfiler.so
+      NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
+      NEW_RELIC_APP_NAME: FIAPCloudGames-fase3-PaymentsAPI
+      NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
+      NEW_RELIC_APPLICATION_LOGGING_ENABLED: "true"
+      NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED: "true"
+    ports:
+      - "8083:8080"
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+
+  # ---------- NOTIFICATIONS (SOMENTE LOCAL) ----------
+  # Em producao o NotificationsAPI e uma Lambda acionada por SQS. Aqui o mesmo
+  # codigo roda na imagem oficial da Lambda, cujo Runtime Interface Emulator
+  # aceita invocacao por HTTP -- e o Kong expoe isso em /notifications/...
+  # Nada destes services existe na AWS.
+  #
+  # Localmente NAO ha o encadeamento automatico SNS -> SQS -> Lambda: users-api
+  # e payments-api seguem publicando no SNS da AWS. Para acionar as funcoes aqui,
+  # chame as rotas do gateway.
+  notifications-dynamodb:
+    image: amazon/dynamodb-local:latest
+    # -sharedDb: sem ele o DynamoDB Local separa as tabelas por access key/regiao
+    # e a funcao nao enxergaria a tabela criada pelo init.
+    # -inMemory: ambiente de teste; o conteudo some junto com o container.
+    command: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
+
+  # Cria a tabela (schema espelhado do template.yaml) e sai. Idempotente.
+  notifications-dynamodb-init:
+    image: amazon/aws-cli:latest
+    entrypoint: ["sh", "/init/init-dynamodb.sh"]
+    environment:
+      DYNAMODB_ENDPOINT: http://notifications-dynamodb:8000
+    volumes:
+      - ./notifications-local/init-dynamodb.sh:/init/init-dynamodb.sh:ro
+    depends_on:
+      notifications-dynamodb: { condition: service_started }
+    restart: "no"
+
+  notifications-user-registered:
+    <<: *notifications-lambda
+    # Porta direta do emulador, para debug sem o gateway:
+    #   POST http://localhost:8084/2015-03-31/functions/function/invocations
+    ports:
+      - "8084:8080"
+
+  notifications-payment-processed:
+    <<: *notifications-lambda
+    # O handler e o unico argumento do entrypoint da imagem da Lambda.
+    command: ["Notifications.Functions::Notifications.Functions.Functions::PaymentProcessedHandler"]
+    ports:
+      - "8085:8080"
+
+  # ---------- API GATEWAY ----------
+  # Kong em modo DB-less: as rotas vem de kong/kong.yml (unica fonte de verdade,
+  # compartilhada com os manifestos k8s). Escopo: users-api, catalog-api,
+  # payments-api e, SO LOCALMENTE, as funcoes do NotificationsAPI.
+  #
+  # Ponto de entrada unico:
+  #   http://localhost:8000/users/...     (login, register, admin)
+  #   http://localhost:8000/catalog/...   (jogos, biblioteca)
+  #   http://localhost:8000/payments/...  (consulta e disparo manual de pagamentos)
+  #   http://localhost:8000/notifications/...  (invoca as funcoes do NotificationsAPI)
+  # As portas diretas dos servicos (8081-8085) continuam abertas para debug.
+  kong:
+    image: kong:3.9
+    # O Kong DB-less nao interpola variaveis de ambiente no YAML declarativo, e
+    # `jwt_secrets.secret` nao aceita referencia de vault. O wrapper injeta o
+    # segredo/issuer no arquivo e chama o entrypoint oficial do Kong.
+    entrypoint: ["/bin/sh", "/kong/declarative/render-and-start.sh"]
+    command: ["kong", "docker-start"]
+    environment:
+      KONG_DATABASE: "off"
+      KONG_PROXY_LISTEN: "0.0.0.0:8000"
+      # Aqui a Admin API escuta em 0.0.0.0 (e nao em 127.0.0.1 como no k8s)
+      # porque o mapeamento de portas do Docker chega pelo IP do container -
+      # com bind no loopback, a publicacao abaixo nao funcionaria. O que limita
+      # o acesso e a propria publicacao, presa em 127.0.0.1 do HOST.
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+      KONG_STATUS_LISTEN: "0.0.0.0:8100"
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      # Mantem o X-Kong-*-Latency e derruba o `Server: kong/3.9`.
+      KONG_HEADERS: "latency_tokens"
+      # Mesma chave que users-api usa para EMITIR e catalog-api para VALIDAR.
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-6a8a56f4d31a272d6e2f048f710c9cce45b51aa343fd6f73d8b69f1218eaac56}
+      # Mesma variavel que o users-api usa em JwtSettings__Issuer.
+      JWT_ISSUER: ${JWT_ISSUER:-FCG}
+    volumes:
+      - ./kong:/kong/declarative:ro
+    ports:
+      - "8000:8000"              # proxy - entrada unica das APIs
+      - "127.0.0.1:8001:8001"    # Admin API (read-only no DB-less), so localhost
+      - "127.0.0.1:8100:8100"    # /status/ready e /metrics, so localhost
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      # Nenhum deles declara healthcheck, entao esperamos so o start.
+      # (O Kong DB-less sobe mesmo com upstream fora do ar - responde 502/503
+      # ate o servico atender.)
+      catalog-api: { condition: service_started }
+      users-api: { condition: service_started }
+      payments-api: { condition: service_started }
+      notifications-user-registered: { condition: service_started }
+      notifications-payment-processed: { condition: service_started }
+
+volumes:
+  pgdata:

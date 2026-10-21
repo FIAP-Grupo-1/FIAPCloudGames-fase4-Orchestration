@@ -1,0 +1,75 @@
+# Redis: cache de leitura do catalog-api (jogos e biblioteca).
+#
+# POR QUE ELE EXISTE AQUI
+# O catalog-api passou a resolver GET /api/v1/games e GET /api/v1/library por
+# `RedisCacheService.GetOrSetAsync`. Sem `ConnectionStrings__Redis` no ambiente,
+# o app cai no default do appsettings.json (`localhost:6379`), nao acha ninguem
+# e devolve 500 em TODA leitura de catalogo -- o banco esta de pe, o gateway
+# roteia certo, e mesmo assim nada responde. Ver README, secao Cache (Redis).
+#
+# Sem persistencia de proposito: isto e cache, nao fonte de verdade. `--save ""`
+# desliga o snapshot RDB e `--appendonly no` o AOF, entao o pod sobe com o cache
+# vazio e o repopula na primeira leitura. Nao ha PVC para dar manutencao.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: fcg
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          # ACL em vez de `--requirepass`: a connection string do StackExchange.Redis
+          # manda `user=fcg,password=...`, e usuario nomeado so existe via ACL.
+          # `default off` fecha o acesso anonimo -- sem isso qualquer pod do cluster
+          # leria o cache sem credencial.
+          #
+          # Cada token da regra e um argv separado, e todos vao entre aspas: em YAML,
+          # `on`/`off` viram booleano, `>` abre bloco escalar, `~` e null e `&` e ancora.
+          args:
+            - --user
+            - default
+            - "off"
+            - --user
+            - fcg
+            - "on"
+            - ">fcg123"
+            - "~*"
+            - "&*"
+            - "+@all"
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+          ports:
+            - containerPort: 6379
+          # `PING` tambem exige autenticacao com o default desligado, entao a sonda
+          # entra com as mesmas credenciais da aplicacao.
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "--user", "fcg", "--pass", "fcg123", "--no-auth-warning", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "--user", "fcg", "--pass", "fcg123", "--no-auth-warning", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: fcg
+spec:
+  selector: { app: redis }
+  ports:
+    - port: 6379
+      targetPort: 6379

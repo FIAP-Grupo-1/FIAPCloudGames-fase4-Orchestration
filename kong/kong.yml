@@ -1,0 +1,505 @@
+# Configuracao declarativa do Kong (modo DB-less / "declarative config").
+#
+# Esta e a UNICA fonte de verdade do gateway: o docker-compose monta este arquivo
+# direto no container e o k8s o consome via ConfigMap gerado por `make kong-config`
+# (k8s/03-kong-config.yaml). Nao edite o ConfigMap a mao.
+#
+# Escopo: users-api, catalog-api e payments-api, mais o NotificationsAPI em modo
+# SOMENTE LOCAL. Em producao ele e uma Lambda acionada por SQS, sem entrada HTTP,
+# e nao passa por gateway nenhum; localmente o mesmo codigo roda na imagem
+# oficial da Lambda e o Kong o invoca pelo Runtime Interface Emulator -- ver o
+# bloco "notifications" abaixo.
+#
+# Todos os hosts (`users-api:8080`, `notifications-user-registered:8080`, ...)
+# funcionam nos dois ambientes locais: sao o nome do service no Compose e o nome
+# do Service ClusterIP no namespace fcg.
+#
+# ----------------------------------------------------------------------
+# COMO AS ROTAS SAO DESENHADAS (leia antes de adicionar um servico)
+# ----------------------------------------------------------------------
+# `strip_path: true` remove do upstream o PREFIXO QUE A ROTA CASOU -- nao apenas
+# o primeiro segmento. Isso tem uma consequencia que costuma passar batido:
+#
+#   rota /users/api/auth/login  +  service http://users-api:8080
+#     -> GET /users/api/auth/login  chega no servico como  GET /
+#        (o prefixo casado foi o caminho inteiro; sobrou nada)
+#
+# Por isso, quando a rota precisa de um caminho ESPECIFICO (para liberar so um
+# endpoint, por exemplo), o caminho do upstream vai na URL DO SERVICE e o que
+# sobra do strip e concatenado depois:
+#
+#   rota /users/api/auth/login  +  service http://users-api:8080/api/auth/login
+#     -> POST /users/api/auth/login  chega como  POST /api/auth/login   [ok]
+#
+# Ou seja: um "service" do Kong e um ENDPOINT de upstream, nao necessariamente um
+# microsservico inteiro. E normal ter varios services apontando para o mesmo host
+# com paths diferentes -- e o que permite politicas distintas por endpoint sem
+# plugin de rewrite.
+#
+# Rotas de PREFIXO amplo (ex.: /users, /catalog) nao tem esse problema: o strip
+# deixa o resto do caminho intacto, entao a URL original do servico continua
+# valendo. Elas ficam como "catch-all" no fim, protegidas por JWT.
+#
+# Precedencia: o Kong casa primeiro a rota mais especifica (prefixo mais longo e,
+# em empate, mais criterios como `methods`). Se a rota especifica nao casar por
+# metodo, a requisicao CAI na catch-all -- e portanto exige JWT. Isso e proposital:
+# a postura e "nega por padrao, libera endpoint a endpoint".
+_format_version: "3.0"
+_transform: true
+
+services:
+  # ====================================================================
+  # catalog-api
+  # ====================================================================
+
+  # --------------------------------------------------------------------
+  # 1) Swagger do catalog, aberto (sem JWT) para facilitar a exploracao.
+  #    O path /swagger vai na URL do service: a rota casa /catalog/swagger
+  #    e o strip deixaria so o resto ("/index.html"), entao e o service
+  #    que recoloca o /swagger na frente:
+  #      GET /catalog/swagger/index.html -> GET /swagger/index.html
+  #
+  #    ATENCAO: o catalog-api registra o Swagger apenas quando
+  #    ASPNETCORE_ENVIRONMENT=Development (`if (app.Environment.IsDevelopment())`
+  #    no Program.cs). Com o Production padrao do Compose/k8s, esta rota
+  #    responde 404 -- vindo do servico, nao do gateway.
+  # --------------------------------------------------------------------
+  - name: catalog-api-swagger
+    url: http://catalog-api:8080/swagger
+    connect_timeout: 5000
+    write_timeout: 30000
+    read_timeout: 30000
+    retries: 2
+    routes:
+      - name: catalog-swagger
+        paths:
+          - /catalog/swagger
+        strip_path: true
+        methods: [GET, HEAD, OPTIONS]
+
+  # --------------------------------------------------------------------
+  # 2) API do catalog, protegida por JWT no gateway (catch-all do /catalog).
+  #    strip_path remove o prefixo /catalog, entao as rotas originais do
+  #    servico continuam valendo:
+  #      GET http://localhost:8000/catalog/api/v1/games
+  #        -> GET http://catalog-api:8080/api/v1/games
+  # --------------------------------------------------------------------
+  - name: catalog-api
+    url: http://catalog-api:8080
+    # Timeouts em ms (default do Kong e 60000; encurtado para falhar rapido).
+    connect_timeout: 5000
+    write_timeout: 30000
+    read_timeout: 30000
+    retries: 2
+    routes:
+      - name: catalog-api-v1
+        paths:
+          - /catalog
+        strip_path: true
+        plugins:
+          # O users-api EMITE o token; aqui o gateway so VALIDA a assinatura
+          # antes de encostar no catalog-api (que segue validando por conta
+          # dele - defesa em profundidade, nao substituicao).
+          - name: jwt
+            config:
+              # O Kong descobre QUAL credencial usar lendo esta claim do token
+              # e casando o valor com o `key` de um jwt_secrets abaixo.
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+              secret_is_base64: false
+              # Onde procurar o token (ordem de precedencia do Kong):
+              header_names:
+                - authorization
+              # Deixa o preflight do CORS passar sem token.
+              run_on_preflight: false
+
+  # ====================================================================
+  # users-api
+  # ====================================================================
+  # Superficie real do servico (src/FCG.API/Endpoints/):
+  #   POST /api/auth/login          -> AllowAnonymous
+  #   POST /api/users/register      -> anonimo
+  #   /api/admin/users/**           -> RequireAuthorization("AdminOnly")
+  #
+  # Login e register PRECISAM ser anonimos no gateway (sao eles que produzem o
+  # token), entao ficam liberados endpoint a endpoint. Todo o resto de /users
+  # cai na catch-all e exige JWT valido.
+  # --------------------------------------------------------------------
+
+  # 1) Login: anonimo, mas com rate-limit proprio (anti brute-force).
+  - name: users-api-login
+    url: http://users-api:8080/api/auth/login
+    connect_timeout: 5000
+    write_timeout: 30000
+    read_timeout: 30000
+    retries: 2
+    routes:
+      - name: users-login
+        paths:
+          - /users/api/auth/login
+        strip_path: true
+        # Restringir o metodo e o que garante que so ESTE verbo passa sem token.
+        # Qualquer outro metodo neste caminho cai na catch-all (com JWT).
+        methods: [POST, OPTIONS]
+        plugins:
+          # Instancia de rota SUBSTITUI a global (o Kong aplica so a mais
+          # especifica de cada plugin): 20/min por IP no lugar dos 120/min.
+          # Tentativa de senha e barata para o atacante e caro para o servico.
+          - name: rate-limiting
+            config:
+              minute: 20
+              hour: 200
+              policy: local
+              limit_by: ip
+              fault_tolerant: true
+              hide_client_headers: false
+
+  # 2) Cadastro: anonimo, mesmo tratamento do login (evita flood de contas).
+  - name: users-api-register
+    url: http://users-api:8080/api/users/register
+    connect_timeout: 5000
+    write_timeout: 30000
+    read_timeout: 30000
+    retries: 2
+    routes:
+      - name: users-register
+        paths:
+          - /users/api/users/register
+        strip_path: true
+        methods: [POST, OPTIONS]
+        plugins:
+          - name: rate-limiting
+            config:
+              minute: 20
+              hour: 200
+              policy: local
+              limit_by: ip
+              fault_tolerant: true
+              hide_client_headers: false
+
+  # 3) Catch-all do /users: exige JWT no gateway.
+  #    Hoje cobre /api/admin/users/** (que o servico ainda restringe ao papel
+  #    Admin -- o plugin jwt confere assinatura/exp, nao papel). Qualquer
+  #    endpoint novo do users-api nasce protegido aqui, sem editar nada.
+  - name: users-api
+    url: http://users-api:8080
+    connect_timeout: 5000
+    write_timeout: 30000
+    read_timeout: 30000
+    retries: 2
+    routes:
+      - name: users-api-protected
+        paths:
+          - /users
+        strip_path: true
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+              secret_is_base64: false
+              header_names:
+                - authorization
+              run_on_preflight: false
+
+  # ====================================================================
+  # payments-api
+  # ====================================================================
+  # Superficie real do servico (src/FCG.API/):
+  #   GET  /health                       -> anonimo (HealthCheckEndpoints)
+  #   POST /payments/process             -> PaymentsController.Process
+  #   GET  /payments                     -> PaymentsController.GetAll
+  #   GET  /payments/{id}                -> PaymentsController.GetById
+  #   GET  /payments/by-event/{eventId}  -> PaymentsController.GetByEventId
+  #
+  # NENHUM desses endpoints tem [Authorize] no servico -- ele nasceu como puro
+  # consumidor de evento e a superficie REST veio depois, para demonstracao. Ou
+  # seja: quem alcanca o pod alcanca os dados. Por isso o gateway e a UNICA
+  # camada de autenticacao aqui, diferente de users/catalog (que validam o token
+  # por conta deles tambem). Motivo extra para a porta 8083/`payments.fcg.local`
+  # ficar so como atalho de debug.
+  #
+  # ATENCAO AO strip_path DESTE SERVICO: o controller ja vive em /payments, o
+  # MESMO prefixo que o gateway usa. Com `strip_path: true` a catch-all mandaria
+  #   GET /payments -> GET /  ... 404, o controller nao esta na raiz.
+  # Como os dois prefixos coincidem, a catch-all usa `strip_path: false` e passa
+  # o caminho inteiro adiante. E o oposto de users/catalog, onde o prefixo do
+  # gateway NAO existe no servico e portanto precisa sair.
+
+  # 1) Health: anonimo. E o unico endpoint fora do prefixo /payments no servico,
+  #    entao o caminho vai na URL DO SERVICE (o strip come /payments/health todo
+  #    e sobra vazio, que concatenado no /health do service da GET /health).
+  - name: payments-api-health
+    url: http://payments-api:8080/health
+    connect_timeout: 5000
+    write_timeout: 30000
+    read_timeout: 30000
+    retries: 2
+    routes:
+      - name: payments-health
+        paths:
+          - /payments/health
+        strip_path: true
+        methods: [GET, HEAD, OPTIONS]
+
+  # 2) Disparo manual de pagamento: escreve no banco E publica um
+  #    PaymentProcessedEvent real no broker (RabbitMQ + SNS). Unico endpoint
+  #    que muda estado, entao ganha JWT e um limite mais apertado que o global
+  #    -- mesmo tratamento que login/register recebem por serem caros de abusar.
+  - name: payments-api-process
+    url: http://payments-api:8080/payments/process
+    connect_timeout: 5000
+    write_timeout: 30000
+    read_timeout: 30000
+    retries: 2
+    routes:
+      - name: payments-process
+        paths:
+          - /payments/process
+        strip_path: true
+        methods: [POST, OPTIONS]
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+              secret_is_base64: false
+              header_names:
+                - authorization
+              run_on_preflight: false
+          - name: rate-limiting
+            config:
+              minute: 30
+              hour: 300
+              policy: local
+              limit_by: ip
+              fault_tolerant: true
+              hide_client_headers: false
+
+  # 3) Catch-all do /payments: exige JWT. Cobre as tres leituras do controller.
+  #    `strip_path: false` de proposito -- ver a nota no topo deste bloco.
+  #
+  #    LIMITE CONHECIDO: `GET /payments` lista os pagamentos de TODOS os
+  #    usuarios, e o plugin jwt confere assinatura/exp, nao papel. Na pratica
+  #    qualquer usuario autenticado le o historico financeiro alheio. O gateway
+  #    nao resolve isso: falta um `AdminOnly` no payments-api, como o users-api
+  #    faz em /api/admin/users/**. Ate lá, o JWT aqui e um degrau acima do
+  #    anonimo de hoje, nao autorizacao completa.
+  - name: payments-api
+    url: http://payments-api:8080
+    connect_timeout: 5000
+    write_timeout: 30000
+    read_timeout: 30000
+    retries: 2
+    routes:
+      - name: payments-api-protected
+        paths:
+          - /payments
+        strip_path: false
+        plugins:
+          - name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+              secret_is_base64: false
+              header_names:
+                - authorization
+              run_on_preflight: false
+  # ====================================================================
+  # notifications -- SOMENTE LOCAL (Compose e Minikube)
+  # ====================================================================
+  # Em producao o NotificationsAPI e uma Lambda acionada por SQS, sem entrada
+  # HTTP, e NAO passa por este gateway: nada deste bloco existe na AWS nem muda
+  # o `sam deploy` daquele repo.
+  #
+  # Localmente, o mesmo codigo roda na imagem oficial da Lambda
+  # (notifications-local/Dockerfile), cujo Runtime Interface Emulator aceita
+  # invocacoes HTTP em  POST /2015-03-31/functions/function/invocations.
+  # Uma funcao por container, como na AWS -- por isso dois services abaixo.
+  #
+  # O corpo esperado e o PROPRIO evento de integracao, o mesmo JSON que
+  # users-api e payments-api publicam no SNS:
+  #   POST /notifications/user-registered    {"UserId","Name","Email","EventId","OccurredAt"}
+  #   POST /notifications/payment-processed  {"UserId","GameId","Status","EventId","OccurredAt"}
+  # O handler, porem, recebe um SQSEvent. O pre-function embrulha o JSON no
+  # envelope ({"Records":[{"body":"<evento>"}]}), exatamente como o SQS faz com
+  # RawMessageDelivery. Se o corpo ja chegar como envelope (ex.: os
+  # events/*.json do repo do NotificationsAPI), ele passa intacto.
+  #
+  # A resposta e o SQSBatchResponse da funcao:
+  #   {"batchItemFailures":[]}                        -> processada
+  #   {"batchItemFailures":[{"itemIdentifier":...}]}  -> falhou; na AWS o SQS
+  #                                                      reentregaria a mensagem
+  # Mensagem malformada ou duplicada tambem responde lista vazia: o handler a
+  # descarta de proposito (na AWS, reentregar nao adiantaria). O motivo fica no
+  # log do container.
+  #
+  # Protegidas por JWT como o resto: sao um atalho de teste que grava no
+  # DynamoDB local e "envia" e-mail, nao uma rota publica.
+
+  - name: notifications-user-registered
+    url: http://notifications-user-registered:8080/2015-03-31/functions/function/invocations
+    connect_timeout: 5000
+    write_timeout: 60000
+    # Cold start da funcao (DI + OpenTelemetry) cabe folgado em 60s.
+    read_timeout: 60000
+    retries: 0      # invocar de novo = processar o evento de novo; nao repita sozinho
+    routes:
+      - name: notifications-user-registered
+        paths:
+          - /notifications/user-registered
+        strip_path: true
+        methods: [POST, OPTIONS]
+        plugins:
+          - name: jwt
+            config: &jwt_padrao
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+              secret_is_base64: false
+              header_names:
+                - authorization
+              run_on_preflight: false
+          - name: pre-function
+            config:
+              access: &envelope_sqs
+                - |
+                  -- Embrulha o evento no envelope SQS que o handler da Lambda espera.
+                  -- Sem cjson (bloqueado no sandbox do Kong): o escape de string JSON
+                  -- e feito a mao -- barra invertida, aspas e caracteres de controle.
+                  local body = kong.request.get_raw_body()
+                  if body == nil or body:match("^%s*$") then
+                    return kong.response.exit(400, {
+                      message = "Corpo ausente: envie o evento de integracao em JSON."
+                    })
+                  end
+                  if not body:match('^%s*{%s*"Records"%s*:') then
+                    local esc = body:gsub('\\', '\\\\')
+                    esc = esc:gsub('"', '\\"')
+                    esc = esc:gsub('%c', function(c)
+                      return string.format('\\u%04x', c:byte())
+                    end)
+                    local id = string.format('kong-local-%d', math.floor(ngx.now() * 1000))
+                    kong.service.request.set_raw_body(
+                      '{"Records":[{"messageId":"' .. id .. '","body":"' .. esc ..
+                      '","eventSource":"aws:sqs"}]}')
+                  end
+                  kong.service.request.set_header("Content-Type", "application/json")
+
+  - name: notifications-payment-processed
+    url: http://notifications-payment-processed:8080/2015-03-31/functions/function/invocations
+    connect_timeout: 5000
+    write_timeout: 60000
+    read_timeout: 60000
+    retries: 0
+    routes:
+      - name: notifications-payment-processed
+        paths:
+          - /notifications/payment-processed
+        strip_path: true
+        methods: [POST, OPTIONS]
+        plugins:
+          - name: jwt
+            config: *jwt_padrao
+          - name: pre-function
+            config:
+              # Mesmo Lua da rota de cadastro (ancora YAML acima).
+              access: *envelope_sqs
+# ----------------------------------------------------------------------
+# Consumers / credenciais JWT
+# ----------------------------------------------------------------------
+# ATENCAO - o casamento que faz o plugin funcionar:
+#
+#   `key` abaixo  ==  claim `iss` dos tokens emitidos pelo users-api
+#
+# Se o issuer do users-api for outro, o Kong responde 401
+# {"message":"No credentials found for given 'iss'"} para TODAS as chamadas.
+# Para descobrir o valor real, faca login no users-api e decodifique o payload
+# do token (parte do meio, base64url) - ex.: cole em https://jwt.io - ou:
+#
+#   TOKEN=<token do login>
+#   echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq .iss
+#
+# O users-api EMITE essa claim a partir de JwtSettings__Issuer, e o gateway a
+# VALIDA. Nos dois casos o valor vem da MESMA variavel de ambiente JWT_ISSUER
+# (default "FCG"), justamente para nao dessincronizar: `.env` no Compose,
+# ConfigMap fcg-config no k8s. Nao e preciso editar este arquivo.
+consumers:
+  - username: fcg-users-api
+    custom_id: users-api-issuer
+    jwt_secrets:
+        # __JWT_ISSUER__ e __JWT_SECRET_KEY__ sao PLACEHOLDERS: o
+        # kong/render-and-start.sh os troca no startup do container pelos
+        # valores das variaveis de ambiente JWT_ISSUER e JWT_SECRET_KEY
+        # (do .env no Compose, do Secret fcg-secrets no k8s) e JA EMITE o
+        # valor com as aspas de YAML - por isso nao ha aspas aqui.
+        # Nenhum segredo fica versionado neste arquivo.
+        #
+        # Por que nao usamos `{vault://env/jwt-secret-key}`: o campo `secret`
+        # de jwt_secrets NAO e "referenceable" no Kong 3.9 - a referencia seria
+        # usada como a propria chave HMAC e toda validacao falharia com
+        # "Invalid signature" (comportamento verificado em teste).
+      - key: __JWT_ISSUER__
+        algorithm: HS256
+        # Mesmo segredo compartilhado por users-api (emite) e catalog-api (valida).
+        secret: __JWT_SECRET_KEY__
+
+# ----------------------------------------------------------------------
+# Plugins globais (valem para toda rota que passar pelo gateway)
+# ----------------------------------------------------------------------
+plugins:
+  # Rastreabilidade: gera/propaga um X-Correlation-ID por request e devolve
+  # o mesmo id na resposta. Facilita amarrar log do gateway com log do servico.
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid#counter
+      echo_downstream: true
+
+  # Metricas no formato Prometheus em http://<kong>:8100/metrics.
+  # Ja deixa o terreno pronto para a frente de observabilidade (Prometheus+Grafana).
+  - name: prometheus
+    config:
+      status_code_metrics: true
+      latency_metrics: true
+      upstream_health_metrics: true
+      bandwidth_metrics: true
+
+  # Protecao basica de abuso. `policy: local` conta por instancia do Kong -
+  # com 2 replicas no k8s o limite efetivo e ~2x. Trocar para `policy: redis`
+  # quando o Redis entrar no projeto.
+  #
+  # Rotas de login/register sobrescrevem estes numeros com um limite menor.
+  - name: rate-limiting
+    config:
+      minute: 120
+      hour: 2000
+      policy: local
+      fault_tolerant: true
+      hide_client_headers: false
+
+  # Rejeita payloads absurdos antes de chegar no servico.
+  - name: request-size-limiting
+    config:
+      allowed_payload_size: 10        # MB
+      size_unit: megabytes
+
+  # CORS liberado para o front consumir o gateway direto.
+  - name: cors
+    config:
+      origins:
+        - "*"
+      methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD]
+      headers:
+        - Accept
+        - Authorization
+        - Content-Type
+        - X-Correlation-ID
+      exposed_headers:
+        - X-Correlation-ID
+      credentials: false
+      max_age: 3600

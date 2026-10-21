@@ -1,0 +1,121 @@
+# NotificationsAPI no emulador da Lambda -- SOMENTE LOCAL.
+#
+# Em producao o NotificationsAPI e uma Lambda acionada por SQS (deploy via
+# `sam deploy` no repo dele) e nada deste arquivo existe la. Aqui o MESMO codigo
+# roda na imagem oficial da Lambda (notifications-local/Dockerfile), cujo
+# Runtime Interface Emulator aceita invocacao HTTP em
+#   POST :8080/2015-03-31/functions/function/invocations
+# e o Kong expoe isso em /notifications/user-registered e
+# /notifications/payment-processed (kong/kong.yml).
+#
+# Uma imagem, dois Deployments -- um por funcao, como na AWS. O handler e o
+# unico argumento do entrypoint da imagem, o mesmo valor do `Handler:` de cada
+# funcao no template.yaml.
+#
+# Localmente NAO ha o encadeamento SNS -> SQS -> Lambda: users-api e
+# payments-api seguem publicando no SNS da AWS. As rotas do gateway sao o
+# gatilho aqui.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifications-user-registered
+  namespace: fcg
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: notifications-user-registered }
+  template:
+    metadata:
+      labels: { app: notifications-user-registered }
+    spec:
+      containers:
+        - name: function
+          image: fcg/notifications-lambda:1.0
+          imagePullPolicy: IfNotPresent
+          args: ["Notifications.Functions::Notifications.Functions.Functions::UserRegisteredHandler"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DynamoDb__ServiceUrl
+              value: "http://notifications-dynamodb:8000"
+            - name: DynamoDb__TableName
+              value: "fcg-notifications"
+            # O SDK da AWS exige credencial e regiao mesmo falando com o DynamoDB
+            # Local (que as ignora). Ficticias DE PROPOSITO: nunca apontar para o
+            # Secret com as chaves reais do SNS.
+            - name: AWS_ACCESS_KEY_ID
+              value: "local"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "local"
+            - name: AWS_REGION
+              value: "us-east-1"
+            # Telemetry.cs aborta a funcao sem esta variavel; com o placeholder os
+            # traces sao recusados pelo New Relic, sem afetar a execucao.
+            - name: NEW_RELIC_LICENSE_KEY
+              value: "local-dev-placeholder"
+          # O emulador abre a porta na hora; a funcao so inicializa na primeira
+          # invocacao (cold start ~2s), igual a Lambda.
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notifications-user-registered
+  namespace: fcg
+spec:
+  selector: { app: notifications-user-registered }
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifications-payment-processed
+  namespace: fcg
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: notifications-payment-processed }
+  template:
+    metadata:
+      labels: { app: notifications-payment-processed }
+    spec:
+      containers:
+        - name: function
+          image: fcg/notifications-lambda:1.0
+          imagePullPolicy: IfNotPresent
+          args: ["Notifications.Functions::Notifications.Functions.Functions::PaymentProcessedHandler"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DynamoDb__ServiceUrl
+              value: "http://notifications-dynamodb:8000"
+            - name: DynamoDb__TableName
+              value: "fcg-notifications"
+            - name: AWS_ACCESS_KEY_ID
+              value: "local"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "local"
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: NEW_RELIC_LICENSE_KEY
+              value: "local-dev-placeholder"
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notifications-payment-processed
+  namespace: fcg
+spec:
+  selector: { app: notifications-payment-processed }
+  ports:
+    - port: 8080
+      targetPort: 8080

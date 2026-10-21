@@ -1,0 +1,69 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fcg-ingress
+  namespace: fcg
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    # Roteamento por hostname: cada API mantém suas rotas originais
+    # (ex: /api/users/register, /api/v1/games), sem precisar de rewrite.
+    - host: users.fcg.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: users-api
+                port:
+                  number: 8080
+    - host: catalog.fcg.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: catalog-api
+                port:
+                  number: 8080
+    - host: payments.fcg.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: payments-api
+                port:
+                  number: 8080
+    # notifications-api NAO tem mais rota aqui: virou uma funcao AWS Lambda
+    # (fora do cluster), acionada por SNS/SQS. Ver README.md, secao Serverless.
+    # API Gateway (Kong): entrada unica, roteando por PREFIXO de caminho
+    # (http://gateway.fcg.local/catalog/api/v1/games). Quem faz o strip do
+    # prefixo /catalog e o proprio Kong, nao o nginx.
+    - host: gateway.fcg.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kong-proxy
+                port:
+                  number: 8000
+    # Painel de gestão do RabbitMQ (não é uma API do projeto, mas fica
+    # exposto pelo mesmo túnel para facilitar a demo).
+    - host: rabbitmq.fcg.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rabbitmq
+                port:
+                  number: 15672

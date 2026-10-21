@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fcg-config
+  namespace: fcg
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  # RabbitMQ: fluxo Catalog -> Payments (OrderPlacedEvent) e Payments -> Catalog
+  # (PaymentProcessedEvent, libera o jogo na biblioteca). A Lambda do NotificationsAPI
+  # e acionada via SNS (fcg-user-events / fcg-payment-events) por users-api/payments-api.
+  RabbitMq__Host: "rabbitmq"
+  RabbitMq__Port: "5672"
+  RabbitMq__Username: "fcg"
+  RabbitMq__VirtualHost: "/"
+  JwtSettings__ExpirationHours: "4"
+  # Nomes de exchange/routing key documentados por aderencia ao requisito.
+  # Na pratica os servicos ja os definem no codigo (via fcg-contracts).
+  Messaging__UsersExchange: "users.exchange"
+  Messaging__CatalogExchange: "catalog.exchange"
+  Messaging__PaymentsExchange: "payments.exchange"
+  # Claim `iss` do JWT: o users-api emite (JwtSettings__Issuer) e o Kong valida.
+  # Os dois Deployments leem esta mesma key, para nao dessincronizar.
+  JWT_ISSUER: "FCG"
+  # SNS (users-api e payments-api publicam; a Lambda do NotificationsAPI consome via SQS).
+  Sns__UserEventsTopicArn: "arn:aws:sns:us-east-1:450753703903:fcg-user-events"
+  Sns__PaymentEventsTopicArn: "arn:aws:sns:us-east-1:450753703903:fcg-payment-events"
+  AWS_REGION: "us-east-1"

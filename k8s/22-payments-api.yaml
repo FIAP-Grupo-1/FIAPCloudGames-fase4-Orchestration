@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: fcg
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: payments-api }
+  template:
+    metadata:
+      labels: { app: payments-api }
+    spec:
+      containers:
+        - name: payments-api
+          image: fcg/payments-api:1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            # payments-api: sem JWT. Usa banco proprio (paymentsdb). PaymentProcessedEvent
+            # vai em dois transportes: RabbitMQ (de volta pro CatalogAPI, libera o jogo na
+            # biblioteca) e SNS (para a Lambda do NotificationsAPI, envia o email).
+            - name: ASPNETCORE_ENVIRONMENT
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: ASPNETCORE_ENVIRONMENT } }
+            - name: RabbitMq__Host
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: RabbitMq__Host } }
+            - name: RabbitMq__Port
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: RabbitMq__Port } }
+            - name: RabbitMq__Username
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: RabbitMq__Username } }
+            - name: RabbitMq__VirtualHost
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: RabbitMq__VirtualHost } }
+            - name: RabbitMq__Password
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: RabbitMq__Password } }
+            - name: Sns__TopicArn
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: Sns__PaymentEventsTopicArn } }
+            - name: AWS_REGION
+              valueFrom: { configMapKeyRef: { name: fcg-config, key: AWS_REGION } }
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: AWS_ACCESS_KEY_ID } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: AWS_SECRET_ACCESS_KEY } }
+            - name: ConnectionStrings__DefaultConnection
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: Payments__ConnectionString } }
+            # Ativa o profiler do CLR. Sem estas 4 variaveis o pacote NewRelic.Agent
+            # fica instalado em /app/newrelic mas NUNCA e carregado (agente inerte).
+            # O GUID precisa de aspas: sem elas o YAML leria {..} como um mapa.
+            - name: CORECLR_ENABLE_PROFILING
+              value: "1"
+            - name: CORECLR_PROFILER
+              value: "{36032161-FFC0-4B61-B559-F6C5D41BAE5A}"
+            - name: CORECLR_NEWRELIC_HOME
+              value: /app/newrelic
+            - name: CORECLR_PROFILER_PATH
+              value: /app/newrelic/libNewRelicProfiler.so
+            - name: NEW_RELIC_LICENSE_KEY
+              valueFrom: { secretKeyRef: { name: new-relic, key: license-key } }
+            - name: NEW_RELIC_APP_NAME
+              value: "FIAPCloudGames-fase3-PaymentsAPI"
+            - name: NEW_RELIC_DISTRIBUTED_TRACING_ENABLED
+              value: "true"
+            - name: NEW_RELIC_APPLICATION_LOGGING_ENABLED
+              value: "true"
+            - name: NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED
+              value: "true"
+          # Pagamentos expõe /health: sonda HTTP.
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-api
+  namespace: fcg
+spec:
+  type: ClusterIP
+  selector: { app: payments-api }
+  ports:
+    - port: 8080
+      targetPort: 8080
