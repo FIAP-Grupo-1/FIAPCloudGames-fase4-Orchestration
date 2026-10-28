@@ -50,6 +50,7 @@ FIAPCloudGames-fase3-Orchestration/   # este repo (nome padrão do git clone)
 ├── notifications-local/ # NotificationsAPI só local: Dockerfile da Lambda + init do DynamoDB
 ├── observability/       # secret/manifestos de New Relic
 ├── docs/                # documentação de observabilidade
+├── infra/cloudformation/ # IaC na AWS (ECR; VPC/EKS em seguida)
 ├── scripts/             # automação (k8s/, kong/ e validate-tracing.sh)
 └── templates/           # modelos de Dockerfile e /k8s por serviço
 ```
@@ -564,6 +565,40 @@ Vale conferir o roteamento no log do Kong -- ele mostra a URL exata que foi para
 docker-compose logs kong | grep upstream       # Compose
 kubectl logs -n fcg deploy/kong | grep upstream  # k8s
 ```
+
+## Infraestrutura na AWS (IaC)
+
+A infra da AWS é descrita em **CloudFormation**, em `infra/cloudformation/`. O Tech Challenge aceita
+Terraform, CloudFormation ou manifestos K8s, e o grupo já usa CloudFormation (via SAM) no `NotificationsAPI`.
+
+### Repositórios ECR (`ecr.yaml`)
+
+Um repositório privado por microsserviço HTTP: `fcg/users-api`, `fcg/catalog-api` e `fcg/payments-api`.
+O `NotificationsAPI` não entra porque, na AWS, a Lambda é publicada em zip e não usa imagem.
+
+| Configuração | Valor | Por quê |
+|---|---|---|
+| Tags | `IMMUTABLE` | uma tag publicada nunca muda; a pipeline tagueia por commit SHA |
+| Scan | on push | varredura de vulnerabilidades (item "Security Scan" do TC) |
+| Lifecycle | sem tag: expira em 1 dia; mantém as 15 mais recentes | controla custo de armazenamento |
+
+Para adicionar um serviço, inclua o nome no parâmetro `ServiceNames` (o template gera um repositório por item com `Fn::ForEach`).
+
+```bash
+# requer AWS CLI autenticado (aws sts get-caller-identity) com permissão de CloudFormation e ECR
+make ecr-deploy     # cria/atualiza a stack fcg-ecr em us-east-1 (AWS_REGION=... para mudar)
+make ecr-outputs    # URIs: <conta>.dkr.ecr.us-east-1.amazonaws.com/fcg/<serviço>
+
+# publicar uma imagem manualmente (a pipeline de CI/CD fará isso)
+REGISTRY=$(aws cloudformation describe-stacks --stack-name fcg-ecr --region us-east-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='RegistryUri'].OutputValue" --output text)
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$REGISTRY"
+docker tag fcg/users-api:1.0 "$REGISTRY/fcg/users-api:$(git rev-parse --short HEAD)"
+docker push "$REGISTRY/fcg/users-api:$(git rev-parse --short HEAD)"
+```
+
+> Remover a stack **não** apaga repositórios que ainda tenham imagens: o CloudFormation falha no delete.
+> É proposital. Esvazie o repositório antes, se a remoção for mesmo intencional.
 
 ## Como fazer deploy no Kubernetes (Minikube)
 

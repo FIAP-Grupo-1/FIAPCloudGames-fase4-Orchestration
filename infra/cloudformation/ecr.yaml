@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::LanguageExtensions
+Description: >
+  FCG - repositórios ECR privados das imagens dos microsserviços (registry nativo
+  da cloud exigido pelo Tech Challenge Fase 4). Um repositório por serviço,
+  gerado a partir da lista em ServiceNames.
+
+Parameters:
+  ServiceNames:
+    Type: CommaDelimitedList
+    Default: users-api,catalog-api,payments-api
+    Description: >
+      Serviços que ganham repositório (fcg/<serviço>). O NotificationsAPI fica de fora:
+      na AWS ele roda como Lambda empacotada em zip, sem imagem.
+  KeepLastImages:
+    Type: Number
+    Default: 15
+    MinValue: 1
+    Description: Quantas imagens com tag cada repositório mantém; as mais antigas expiram.
+  ImageTagMutability:
+    Type: String
+    Default: IMMUTABLE
+    AllowedValues: [IMMUTABLE, MUTABLE]
+    Description: >
+      IMMUTABLE impede sobrescrever uma tag já publicada (a pipeline deve taggear por
+      commit SHA/versão, não reutilizar "latest").
+
+Resources:
+  Fn::ForEach::Repositories:
+    - Service
+    - !Ref ServiceNames
+    - 'Repo&{Service}':
+        Type: AWS::ECR::Repository
+        Properties:
+          RepositoryName: !Sub 'fcg/${Service}'
+          ImageTagMutability: !Ref ImageTagMutability
+          ImageScanningConfiguration:
+            ScanOnPush: true
+          EncryptionConfiguration:
+            EncryptionType: AES256
+          LifecyclePolicy:
+            LifecyclePolicyText: !Sub |
+              {
+                "rules": [
+                  {
+                    "rulePriority": 1,
+                    "description": "Remove imagens sem tag depois de 1 dia",
+                    "selection": {
+                      "tagStatus": "untagged",
+                      "countType": "sinceImagePushed",
+                      "countUnit": "days",
+                      "countNumber": 1
+                    },
+                    "action": { "type": "expire" }
+                  },
+                  {
+                    "rulePriority": 2,
+                    "description": "Mantém só as ${KeepLastImages} imagens mais recentes",
+                    "selection": {
+                      "tagStatus": "any",
+                      "countType": "imageCountMoreThan",
+                      "countNumber": ${KeepLastImages}
+                    },
+                    "action": { "type": "expire" }
+                  }
+                ]
+              }
+          Tags:
+            - Key: project
+              Value: fcg
+            - Key: service
+              Value: !Ref Service
+
+Outputs:
+  RegistryUri:
+    Description: Endereço do registry (usado no docker login e no prefixo das imagens).
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com'
+    Export:
+      Name: fcg-ecr-registry-uri
+  Fn::ForEach::RepositoryUris:
+    - Service
+    - !Ref ServiceNames
+    - 'Repo&{Service}Uri':
+        Description: !Sub 'URI do repositório de ${Service}'
+        Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/fcg/${Service}'
+        Export:
+          Name: !Sub 'fcg-ecr-${Service}-uri'

@@ -11,8 +11,10 @@ endif
 
 SHELL := $(BASH)
 NAMESPACE ?= fcg
+AWS_REGION ?= us-east-1
+ECR_STACK ?= fcg-ecr
 
-.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets
+.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs
 
 help:
 	@echo "Comandos disponiveis:"
@@ -25,6 +27,8 @@ help:
 	@echo "  make k8s-down     - remove o namespace $(NAMESPACE) (derruba tudo)"
 	@echo "  make kong-config  - regera k8s/03-kong-config.yaml a partir de kong/ (rode apos editar kong/kong.yml)"
 	@echo "  make k8s-secrets  - reaplica os segredos reais do .env no cluster (New Relic e AWS)"
+	@echo "  make ecr-deploy   - cria/atualiza os repositorios ECR na AWS (stack CloudFormation $(ECR_STACK))"
+	@echo "  make ecr-outputs  - lista as URIs dos repositorios ECR criados"
 
 k8s-start:
 	@echo "==> Iniciando o cluster Minikube"
@@ -57,3 +61,15 @@ k8s-ingress:
 k8s-down:
 	@echo "==> Removendo o namespace $(NAMESPACE)"
 	-kubectl delete namespace $(NAMESPACE)
+
+ecr-deploy:
+	aws cloudformation deploy \
+		--template-file infra/cloudformation/ecr.yaml \
+		--stack-name $(ECR_STACK) \
+		--region $(AWS_REGION) \
+		--capabilities CAPABILITY_AUTO_EXPAND \
+		--no-fail-on-empty-changeset
+
+ecr-outputs:
+	aws cloudformation describe-stacks --stack-name $(ECR_STACK) --region $(AWS_REGION) \
+		--query "Stacks[0].Outputs[].[OutputKey,OutputValue]" --output table
