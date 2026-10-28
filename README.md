@@ -626,6 +626,30 @@ docker push "$REGISTRY/fcg/users-api:sha-$(git rev-parse --short HEAD)"
 > Remover a stack **não** apaga repositórios que ainda tenham imagens: o CloudFormation falha no delete.
 > É proposital. Esvazie o repositório antes, se a remoção for mesmo intencional.
 
+### Acesso do GitHub Actions ao ECR (`github-oidc.yaml`)
+
+Os workflows de CI/CD dos serviços publicam imagens no ECR **sem access key guardada no GitHub**: o job
+troca o token OIDC do GitHub por credenciais temporárias de uma IAM Role (válidas por até 1h).
+
+| Recurso | O que faz |
+|---|---|
+| Identity Provider `token.actions.githubusercontent.com` | um por conta; `CreateOidcProvider=false` se já existir |
+| Role `fcg-gha-<serviço>` (uma por repo) | só faz push no `fcg/<serviço>` do próprio repo |
+
+A proteção está na **trust policy**: a role só é assumida pelo repositório exato e só a partir da `main` ou
+de tags `v*`. Workflows de pull request (inclusive de forks) não conseguem assumir a role, então ninguém de
+fora publica no ECR abrindo um PR.
+
+```bash
+export AWS_PROFILE=fcg               # conta do grupo (ver aviso acima)
+make oidc-deploy                     # cria o provider e as 3 roles (precisa de permissão de IAM)
+make oidc-outputs                    # ARN de cada role
+```
+
+Depois, em cada repositório de serviço, um admin cadastra o ARN como **variável** (não secret) do Actions:
+`Settings > Secrets and variables > Actions > Variables > AWS_ROLE_ARN`. O ARN não é segredo, mas fica fora
+do código para não fixar a conta no workflow.
+
 ## Como fazer deploy no Kubernetes (Minikube)
 
 ### Opção automatizada (recomendada)

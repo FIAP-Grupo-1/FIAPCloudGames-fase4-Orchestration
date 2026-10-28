@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::LanguageExtensions
+Description: >
+  FCG - acesso do GitHub Actions à AWS via OIDC, sem access key guardada no GitHub.
+  Cria o Identity Provider do GitHub e uma IAM Role por repositório de serviço,
+  que só pode publicar imagens no repositório ECR do próprio serviço.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: joao-malvetoni-alta-horizon
+    Description: Organização/usuário dono dos repositórios no GitHub.
+  ServiceRepos:
+    Type: CommaDelimitedList
+    Default: UsersAPI,CatalogAPI,PaymentsAPI
+    Description: >
+      Sufixo dos repositórios FIAPCloudGames-fase4-<sufixo> que ganham role. Cada um
+      precisa de uma entrada em Mappings.EcrRepository.
+  CreateOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      O provider OIDC do GitHub é único por conta. Use false se ele já existir
+      (criado por outra stack ou à mão).
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Mappings:
+  EcrRepository:
+    UsersAPI:
+      Name: fcg/users-api
+      RoleName: fcg-gha-users-api
+    CatalogAPI:
+      Name: fcg/catalog-api
+      RoleName: fcg-gha-catalog-api
+    PaymentsAPI:
+      Name: fcg/payments-api
+      RoleName: fcg-gha-payments-api
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  Fn::ForEach::PushRoles:
+    - Repo
+    - !Ref ServiceRepos
+    - 'PushRole${Repo}':
+        Type: AWS::IAM::Role
+        Properties:
+          RoleName: !FindInMap [EcrRepository, !Ref Repo, RoleName]
+          Description: !Sub 'GitHub Actions de FIAPCloudGames-fase4-${Repo}: push no ECR'
+          MaxSessionDuration: 3600
+          # Quem pode assumir: só o repositório exato, e só a partir da main ou de tags v*.
+          # PRs (inclusive de forks) ficam de fora: o "sub" deles é repo:...:pull_request.
+          AssumeRolePolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Principal:
+                  Federated: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+                Action: sts:AssumeRoleWithWebIdentity
+                Condition:
+                  StringEquals:
+                    token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                  StringLike:
+                    token.actions.githubusercontent.com:sub:
+                      - !Sub 'repo:${GitHubOrg}/FIAPCloudGames-fase4-${Repo}:ref:refs/heads/main'
+                      - !Sub 'repo:${GitHubOrg}/FIAPCloudGames-fase4-${Repo}:ref:refs/tags/v*'
+          Policies:
+            - PolicyName: ecr-push
+              PolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                  - Effect: Allow
+                    Action: ecr:GetAuthorizationToken
+                    Resource: '*'
+                  - Effect: Allow
+                    Action:
+                      - ecr:BatchCheckLayerAvailability
+                      - ecr:InitiateLayerUpload
+                      - ecr:UploadLayerPart
+                      - ecr:CompleteLayerUpload
+                      - ecr:PutImage
+                      # o workflow confere se a tag já existe (tags são IMMUTABLE)
+                      - ecr:DescribeImages
+                    Resource: !Sub
+                      - 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepo}'
+                      - EcrRepo: !FindInMap [EcrRepository, !Ref Repo, Name]
+
+Outputs:
+  Fn::ForEach::RoleArns:
+    - Repo
+    - !Ref ServiceRepos
+    - 'PushRole${Repo}Arn':
+        Description: !Sub 'Valor da variável AWS_ROLE_ARN no repositório FIAPCloudGames-fase4-${Repo}'
+        Value: !Sub
+          - 'arn:aws:iam::${AWS::AccountId}:role/${RoleName}'
+          - RoleName: !FindInMap [EcrRepository, !Ref Repo, RoleName]
