@@ -602,8 +602,16 @@ Por isso a proteção de produção é feita por **convenção de tag**:
 
 Para adicionar um serviço, inclua o nome no parâmetro `ServiceNames` (o template gera um repositório por item com `Fn::ForEach`).
 
+> ⚠️ **Confira a conta antes de rodar.** Sem `AWS_PROFILE`, o AWS CLI usa o profile `default`, que pode ser
+> a sua conta pessoal, e a stack é criada lá sem nenhum aviso. Configure um profile com as credenciais da
+> **conta do grupo** (aqui chamado `fcg`; liste os seus com `aws configure list-profiles`) e exporte antes
+> de qualquer comando desta seção. O `aws sts get-caller-identity` deve mostrar a conta do grupo.
+
 ```bash
-# requer AWS CLI autenticado (aws sts get-caller-identity) com permissão de CloudFormation e ECR
+export AWS_PROFILE=fcg              # profile da conta do grupo (use o nome do seu)
+aws sts get-caller-identity         # confira o "Account" antes de seguir
+
+# requer permissão de CloudFormation e ECR na conta do grupo
 make ecr-deploy     # cria/atualiza a stack fcg-ecr em us-east-1 (AWS_REGION=... para mudar)
 make ecr-outputs    # URIs: <conta>.dkr.ecr.us-east-1.amazonaws.com/fcg/<serviço>
 
