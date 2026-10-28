@@ -578,9 +578,27 @@ O `NotificationsAPI` não entra porque, na AWS, a Lambda é publicada em zip e n
 
 | Configuração | Valor | Por quê |
 |---|---|---|
-| Tags | `IMMUTABLE` | uma tag publicada nunca muda; a pipeline tagueia por commit SHA |
+| Tags | `IMMUTABLE` | uma tag publicada nunca muda |
 | Scan | on push | varredura de vulnerabilidades (item "Security Scan" do TC) |
-| Lifecycle | sem tag: expira em 1 dia; mantém as 15 mais recentes | controla custo de armazenamento |
+| Lifecycle | expira imagens sem tag e tags de dev/CI após 15 dias (`DevImageRetentionDays`) | controla custo sem apagar o que roda em produção |
+
+#### Convenção de tags (lifecycle policy)
+
+O ECR não sabe quais imagens estão rodando no cluster: a lifecycle policy só olha data de push e tags.
+Por isso a proteção de produção é feita por **convenção de tag**:
+
+| Tag | Exemplo | Expira? |
+|---|---|---|
+| `v*`, `prod-*`, `release-*` | `v1.2.3`, `prod-20261027` | **nunca** |
+| `dev-*`, `pr-*`, `feature-*`, `sha-*` | `sha-0b3c970`, `pr-12` | após 15 dias do push |
+| sem tag | (tag movida para outra imagem) | após 15 dias do push |
+
+- **Manifestos de produção devem usar tag protegida ou digest** (`...fcg/users-api@sha256:...`), nunca `sha-*`/`dev-*`:
+  se a tag expirar, o pull falha no próximo restart do pod, mesmo que outra tag aponte para o mesmo digest.
+- **Tag fora dos padrões nunca expira** (o ECR não tem "expirar tudo exceto X"). Um formato novo de tag de
+  dev precisa de uma regra nova em `ecr.yaml`, senão as imagens acumulam.
+- A policy roda de forma assíncrona (cerca de 1x por dia). Para simular sem apagar nada:
+  `aws ecr start-lifecycle-policy-preview --repository-name fcg/users-api` e depois `aws ecr get-lifecycle-policy-preview --repository-name fcg/users-api`.
 
 Para adicionar um serviço, inclua o nome no parâmetro `ServiceNames` (o template gera um repositório por item com `Fn::ForEach`).
 
@@ -593,8 +611,8 @@ make ecr-outputs    # URIs: <conta>.dkr.ecr.us-east-1.amazonaws.com/fcg/<serviç
 REGISTRY=$(aws cloudformation describe-stacks --stack-name fcg-ecr --region us-east-1 \
   --query "Stacks[0].Outputs[?OutputKey=='RegistryUri'].OutputValue" --output text)
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$REGISTRY"
-docker tag fcg/users-api:1.0 "$REGISTRY/fcg/users-api:$(git rev-parse --short HEAD)"
-docker push "$REGISTRY/fcg/users-api:$(git rev-parse --short HEAD)"
+docker tag fcg/users-api:1.0 "$REGISTRY/fcg/users-api:sha-$(git rev-parse --short HEAD)"   # expira em 15 dias
+docker push "$REGISTRY/fcg/users-api:sha-$(git rev-parse --short HEAD)"
 ```
 
 > Remover a stack **não** apaga repositórios que ainda tenham imagens: o CloudFormation falha no delete.

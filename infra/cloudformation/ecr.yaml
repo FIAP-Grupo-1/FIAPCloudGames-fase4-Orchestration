@@ -12,11 +12,13 @@ Parameters:
     Description: >
       Serviços que ganham repositório (fcg/<serviço>). O NotificationsAPI fica de fora:
       na AWS ele roda como Lambda empacotada em zip, sem imagem.
-  KeepLastImages:
+  DevImageRetentionDays:
     Type: Number
     Default: 15
     MinValue: 1
-    Description: Quantas imagens com tag cada repositório mantém; as mais antigas expiram.
+    Description: >
+      Dias até expirar imagens sem tag e imagens com tag de dev/CI (dev-*, pr-*,
+      feature-*, sha-*). Tags de release (v*, prod-*, release-*) nunca expiram.
   ImageTagMutability:
     Type: String
     Default: IMMUTABLE
@@ -38,28 +40,71 @@ Resources:
             ScanOnPush: true
           EncryptionConfiguration:
             EncryptionType: AES256
+          # Só expira o que casa explicitamente com tags de dev/CI ou está sem tag; o resto
+          # (v*, prod-*, release-*) nunca é tocado. O ECR não tem "expirar tudo exceto X", então
+          # um formato novo de tag de dev precisa de regra própria aqui, senão acumula.
+          # Uma regra por padrão: com vários itens no tagPatternList, o ECR só seleciona imagens
+          # que tenham TODAS as tags (AND), não qualquer uma delas.
           LifecyclePolicy:
             LifecyclePolicyText: !Sub |
               {
                 "rules": [
                   {
                     "rulePriority": 1,
-                    "description": "Remove imagens sem tag depois de 1 dia",
+                    "description": "Limpa imagens sem tag após ${DevImageRetentionDays} dias",
                     "selection": {
                       "tagStatus": "untagged",
                       "countType": "sinceImagePushed",
                       "countUnit": "days",
-                      "countNumber": 1
+                      "countNumber": ${DevImageRetentionDays}
                     },
                     "action": { "type": "expire" }
                   },
                   {
                     "rulePriority": 2,
-                    "description": "Mantém só as ${KeepLastImages} imagens mais recentes",
+                    "description": "Expira tags dev-* após ${DevImageRetentionDays} dias",
                     "selection": {
-                      "tagStatus": "any",
-                      "countType": "imageCountMoreThan",
-                      "countNumber": ${KeepLastImages}
+                      "tagStatus": "tagged",
+                      "tagPatternList": ["dev-*"],
+                      "countType": "sinceImagePushed",
+                      "countUnit": "days",
+                      "countNumber": ${DevImageRetentionDays}
+                    },
+                    "action": { "type": "expire" }
+                  },
+                  {
+                    "rulePriority": 3,
+                    "description": "Expira tags pr-* após ${DevImageRetentionDays} dias",
+                    "selection": {
+                      "tagStatus": "tagged",
+                      "tagPatternList": ["pr-*"],
+                      "countType": "sinceImagePushed",
+                      "countUnit": "days",
+                      "countNumber": ${DevImageRetentionDays}
+                    },
+                    "action": { "type": "expire" }
+                  },
+                  {
+                    "rulePriority": 4,
+                    "description": "Expira tags feature-* após ${DevImageRetentionDays} dias",
+                    "selection": {
+                      "tagStatus": "tagged",
+                      "tagPatternList": ["feature-*"],
+                      "countType": "sinceImagePushed",
+                      "countUnit": "days",
+                      "countNumber": ${DevImageRetentionDays}
+                    },
+                    "action": { "type": "expire" }
+                  },
+                  {
+                    "rulePriority": 5,
+                    "description": "Expira tags sha-* após ${DevImageRetentionDays} dias",
+                    "selection": {
+                      "tagStatus": "tagged",
+                      "tagPatternList": ["sha-*"],
+                      "countType": "sinceImagePushed",
+                      "countUnit": "days",
+                      "countNumber": ${DevImageRetentionDays}
                     },
                     "action": { "type": "expire" }
                   }
