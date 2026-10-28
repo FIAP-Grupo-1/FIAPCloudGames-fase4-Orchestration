@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::LanguageExtensions
+Description: >
+  FCG - acesso do GitHub Actions à AWS via OIDC, sem access key guardada no GitHub.
+  Cria o Identity Provider do GitHub e uma IAM Role por repositório de serviço,
+  que só pode publicar imagens no repositório ECR do próprio serviço.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: joao-malvetoni-alta-horizon
+    Description: Organização/usuário dono dos repositórios no GitHub.
+  GitHubOwnerId:
+    Type: String
+    Default: '245437274'
+    AllowedPattern: '[0-9]+'
+    Description: >
+      ID numérico do dono (gh api users/<GitHubOrg> --jq .id). Faz parte do "sub" do token
+      quando o repositório usa subject imutável.
+  ServiceRepos:
+    Type: CommaDelimitedList
+    Default: UsersAPI,CatalogAPI,PaymentsAPI
+    Description: >
+      Sufixo dos repositórios FIAPCloudGames-fase4-<sufixo> que ganham role. Cada um
+      precisa de uma entrada em Mappings.EcrRepository (com o RepoId: gh api repos/<org>/<repo> --jq .id).
+  CreateOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      O provider OIDC do GitHub é único por conta. Use false se ele já existir
+      (criado por outra stack ou à mão).
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Mappings:
+  EcrRepository:
+    UsersAPI:
+      Name: fcg/users-api
+      RoleName: fcg-gha-users-api
+      RepoId: '1427736701'
+    CatalogAPI:
+      Name: fcg/catalog-api
+      RoleName: fcg-gha-catalog-api
+      RepoId: '1427734632'
+    PaymentsAPI:
+      Name: fcg/payments-api
+      RoleName: fcg-gha-payments-api
+      RepoId: '1427737598'
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+
+  Fn::ForEach::PushRoles:
+    - Repo
+    - !Ref ServiceRepos
+    - 'PushRole${Repo}':
+        Type: AWS::IAM::Role
+        Properties:
+          RoleName: !FindInMap [EcrRepository, !Ref Repo, RoleName]
+          Description: !Sub 'GitHub Actions de FIAPCloudGames-fase4-${Repo}: push no ECR'
+          MaxSessionDuration: 3600
+          # Quem pode assumir: só o repositório exato, e só a partir da main ou de tags v*.
+          # PRs (inclusive de forks) ficam de fora: o "sub" deles termina em :pull_request.
+          #
+          # Os repositórios usam subject imutável (use_immutable_subject no GitHub), então o
+          # "sub" leva o ID numérico do dono e do repo: repo:<org>@<id>/<repo>@<id>:ref:...
+          # Um repo apagado e recriado com o mesmo nome ganha outro ID e não herda o acesso.
+          # Para conferir o formato: gh api repos/<org>/<repo>/actions/oidc/customization/sub
+          AssumeRolePolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Principal:
+                  Federated: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+                Action: sts:AssumeRoleWithWebIdentity
+                Condition:
+                  StringEquals:
+                    token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                  StringLike:
+                    token.actions.githubusercontent.com:sub:
+                      - !Sub
+                        - 'repo:${GitHubOrg}@${GitHubOwnerId}/FIAPCloudGames-fase4-${Repo}@${RepoId}:ref:refs/heads/main'
+                        - RepoId: !FindInMap [EcrRepository, !Ref Repo, RepoId]
+                      - !Sub
+                        - 'repo:${GitHubOrg}@${GitHubOwnerId}/FIAPCloudGames-fase4-${Repo}@${RepoId}:ref:refs/tags/v*'
+                        - RepoId: !FindInMap [EcrRepository, !Ref Repo, RepoId]
+          Policies:
+            - PolicyName: ecr-push
+              PolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                  - Effect: Allow
+                    Action: ecr:GetAuthorizationToken
+                    Resource: '*'
+                  - Effect: Allow
+                    Action:
+                      - ecr:BatchCheckLayerAvailability
+                      - ecr:InitiateLayerUpload
+                      - ecr:UploadLayerPart
+                      - ecr:CompleteLayerUpload
+                      - ecr:PutImage
+                      # o workflow confere se a tag já existe (tags são IMMUTABLE)
+                      - ecr:DescribeImages
+                      # o docker push faz HEAD no manifest/blobs antes de gravar; sem
+                      # essas leituras o push termina em 403 depois de subir as camadas
+                      - ecr:BatchGetImage
+                      - ecr:GetDownloadUrlForLayer
+                    Resource: !Sub
+                      - 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepo}'
+                      - EcrRepo: !FindInMap [EcrRepository, !Ref Repo, Name]
+
+Outputs:
+  Fn::ForEach::RoleArns:
+    - Repo
+    - !Ref ServiceRepos
+    - 'PushRole${Repo}Arn':
+        Description: !Sub 'Valor da variável AWS_ROLE_ARN no repositório FIAPCloudGames-fase4-${Repo}'
+        Value: !Sub
+          - 'arn:aws:iam::${AWS::AccountId}:role/${RoleName}'
+          - RoleName: !FindInMap [EcrRepository, !Ref Repo, RoleName]

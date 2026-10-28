@@ -50,6 +50,7 @@ FIAPCloudGames-fase3-Orchestration/   # este repo (nome padrão do git clone)
 ├── notifications-local/ # NotificationsAPI só local: Dockerfile da Lambda + init do DynamoDB
 ├── observability/       # secret/manifestos de New Relic
 ├── docs/                # documentação de observabilidade
+├── infra/cloudformation/ # IaC na AWS (ECR; VPC/EKS em seguida)
 ├── scripts/             # automação (k8s/, kong/ e validate-tracing.sh)
 └── templates/           # modelos de Dockerfile e /k8s por serviço
 ```
@@ -564,6 +565,90 @@ Vale conferir o roteamento no log do Kong -- ele mostra a URL exata que foi para
 docker-compose logs kong | grep upstream       # Compose
 kubectl logs -n fcg deploy/kong | grep upstream  # k8s
 ```
+
+## Infraestrutura na AWS (IaC)
+
+A infra da AWS é descrita em **CloudFormation**, em `infra/cloudformation/`. O Tech Challenge aceita
+Terraform, CloudFormation ou manifestos K8s, e o grupo já usa CloudFormation (via SAM) no `NotificationsAPI`.
+
+### Repositórios ECR (`ecr.yaml`)
+
+Um repositório privado por microsserviço HTTP: `fcg/users-api`, `fcg/catalog-api` e `fcg/payments-api`.
+O `NotificationsAPI` não entra porque, na AWS, a Lambda é publicada em zip e não usa imagem.
+
+| Configuração | Valor | Por quê |
+|---|---|---|
+| Tags | `IMMUTABLE` | uma tag publicada nunca muda |
+| Scan | on push | varredura de vulnerabilidades (item "Security Scan" do TC) |
+| Lifecycle | expira imagens sem tag e tags de dev/CI após 15 dias (`DevImageRetentionDays`) | controla custo sem apagar o que roda em produção |
+
+#### Convenção de tags (lifecycle policy)
+
+O ECR não sabe quais imagens estão rodando no cluster: a lifecycle policy só olha data de push e tags.
+Por isso a proteção de produção é feita por **convenção de tag**:
+
+| Tag | Exemplo | Expira? |
+|---|---|---|
+| `v*`, `prod-*`, `release-*` | `v1.2.3`, `prod-20261027` | **nunca** |
+| `dev-*`, `pr-*`, `feature-*`, `sha-*` | `sha-0b3c970`, `pr-12` | após 15 dias do push |
+| sem tag | (tag movida para outra imagem) | após 15 dias do push |
+
+- **Manifestos de produção devem usar tag protegida ou digest** (`...fcg/users-api@sha256:...`), nunca `sha-*`/`dev-*`:
+  se a tag expirar, o pull falha no próximo restart do pod, mesmo que outra tag aponte para o mesmo digest.
+- **Tag fora dos padrões nunca expira** (o ECR não tem "expirar tudo exceto X"). Um formato novo de tag de
+  dev precisa de uma regra nova em `ecr.yaml`, senão as imagens acumulam.
+- A policy roda de forma assíncrona (cerca de 1x por dia). Para simular sem apagar nada:
+  `aws ecr start-lifecycle-policy-preview --repository-name fcg/users-api` e depois `aws ecr get-lifecycle-policy-preview --repository-name fcg/users-api`.
+
+Para adicionar um serviço, inclua o nome no parâmetro `ServiceNames` (o template gera um repositório por item com `Fn::ForEach`).
+
+> ⚠️ **Confira a conta antes de rodar.** Sem `AWS_PROFILE`, o AWS CLI usa o profile `default`, que pode ser
+> a sua conta pessoal, e a stack é criada lá sem nenhum aviso. Configure um profile com as credenciais da
+> **conta do grupo** (aqui chamado `fcg`; liste os seus com `aws configure list-profiles`) e exporte antes
+> de qualquer comando desta seção. O `aws sts get-caller-identity` deve mostrar a conta do grupo.
+
+```bash
+export AWS_PROFILE=fcg              # profile da conta do grupo (use o nome do seu)
+aws sts get-caller-identity         # confira o "Account" antes de seguir
+
+# requer permissão de CloudFormation e ECR na conta do grupo
+make ecr-deploy     # cria/atualiza a stack fcg-ecr em us-east-1 (AWS_REGION=... para mudar)
+make ecr-outputs    # URIs: <conta>.dkr.ecr.us-east-1.amazonaws.com/fcg/<serviço>
+
+# publicar uma imagem manualmente (a pipeline de CI/CD fará isso)
+REGISTRY=$(aws cloudformation describe-stacks --stack-name fcg-ecr --region us-east-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='RegistryUri'].OutputValue" --output text)
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$REGISTRY"
+docker tag fcg/users-api:1.0 "$REGISTRY/fcg/users-api:sha-$(git rev-parse --short HEAD)"   # expira em 15 dias
+docker push "$REGISTRY/fcg/users-api:sha-$(git rev-parse --short HEAD)"
+```
+
+> Remover a stack **não** apaga repositórios que ainda tenham imagens: o CloudFormation falha no delete.
+> É proposital. Esvazie o repositório antes, se a remoção for mesmo intencional.
+
+### Acesso do GitHub Actions ao ECR (`github-oidc.yaml`)
+
+Os workflows de CI/CD dos serviços publicam imagens no ECR **sem access key guardada no GitHub**: o job
+troca o token OIDC do GitHub por credenciais temporárias de uma IAM Role (válidas por até 1h).
+
+| Recurso | O que faz |
+|---|---|
+| Identity Provider `token.actions.githubusercontent.com` | um por conta; `CreateOidcProvider=false` se já existir |
+| Role `fcg-gha-<serviço>` (uma por repo) | só faz push no `fcg/<serviço>` do próprio repo |
+
+A proteção está na **trust policy**: a role só é assumida pelo repositório exato e só a partir da `main` ou
+de tags `v*`. Workflows de pull request (inclusive de forks) não conseguem assumir a role, então ninguém de
+fora publica no ECR abrindo um PR.
+
+```bash
+export AWS_PROFILE=fcg               # conta do grupo (ver aviso acima)
+make oidc-deploy                     # cria o provider e as 3 roles (precisa de permissão de IAM)
+make oidc-outputs                    # ARN de cada role
+```
+
+Depois, em cada repositório de serviço, um admin cadastra o ARN como **variável** (não secret) do Actions:
+`Settings > Secrets and variables > Actions > Variables > AWS_ROLE_ARN`. O ARN não é segredo, mas fica fora
+do código para não fixar a conta no workflow.
 
 ## Como fazer deploy no Kubernetes (Minikube)
 
