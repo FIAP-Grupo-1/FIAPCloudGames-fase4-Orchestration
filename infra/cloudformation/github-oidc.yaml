@@ -109,6 +109,10 @@ Resources:
                       - ecr:PutImage
                       # o workflow confere se a tag já existe (tags são IMMUTABLE)
                       - ecr:DescribeImages
+                      # o docker push faz HEAD no manifest/blobs antes de gravar; sem
+                      # essas leituras o push termina em 403 depois de subir as camadas
+                      - ecr:BatchGetImage
+                      - ecr:GetDownloadUrlForLayer
                     Resource: !Sub
                       - 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepo}'
                       - EcrRepo: !FindInMap [EcrRepository, !Ref Repo, Name]
