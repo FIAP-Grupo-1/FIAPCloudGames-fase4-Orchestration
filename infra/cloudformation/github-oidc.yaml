@@ -10,12 +10,19 @@ Parameters:
     Type: String
     Default: joao-malvetoni-alta-horizon
     Description: Organização/usuário dono dos repositórios no GitHub.
+  GitHubOwnerId:
+    Type: String
+    Default: '245437274'
+    AllowedPattern: '[0-9]+'
+    Description: >
+      ID numérico do dono (gh api users/<GitHubOrg> --jq .id). Faz parte do "sub" do token
+      quando o repositório usa subject imutável.
   ServiceRepos:
     Type: CommaDelimitedList
     Default: UsersAPI,CatalogAPI,PaymentsAPI
     Description: >
       Sufixo dos repositórios FIAPCloudGames-fase4-<sufixo> que ganham role. Cada um
-      precisa de uma entrada em Mappings.EcrRepository.
+      precisa de uma entrada em Mappings.EcrRepository (com o RepoId: gh api repos/<org>/<repo> --jq .id).
   CreateOidcProvider:
     Type: String
     Default: 'true'
@@ -32,12 +39,15 @@ Mappings:
     UsersAPI:
       Name: fcg/users-api
       RoleName: fcg-gha-users-api
+      RepoId: '1427736701'
     CatalogAPI:
       Name: fcg/catalog-api
       RoleName: fcg-gha-catalog-api
+      RepoId: '1427734632'
     PaymentsAPI:
       Name: fcg/payments-api
       RoleName: fcg-gha-payments-api
+      RepoId: '1427737598'
 
 Resources:
   GitHubOidcProvider:
@@ -58,7 +68,12 @@ Resources:
           Description: !Sub 'GitHub Actions de FIAPCloudGames-fase4-${Repo}: push no ECR'
           MaxSessionDuration: 3600
           # Quem pode assumir: só o repositório exato, e só a partir da main ou de tags v*.
-          # PRs (inclusive de forks) ficam de fora: o "sub" deles é repo:...:pull_request.
+          # PRs (inclusive de forks) ficam de fora: o "sub" deles termina em :pull_request.
+          #
+          # Os repositórios usam subject imutável (use_immutable_subject no GitHub), então o
+          # "sub" leva o ID numérico do dono e do repo: repo:<org>@<id>/<repo>@<id>:ref:...
+          # Um repo apagado e recriado com o mesmo nome ganha outro ID e não herda o acesso.
+          # Para conferir o formato: gh api repos/<org>/<repo>/actions/oidc/customization/sub
           AssumeRolePolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -71,8 +86,12 @@ Resources:
                     token.actions.githubusercontent.com:aud: sts.amazonaws.com
                   StringLike:
                     token.actions.githubusercontent.com:sub:
-                      - !Sub 'repo:${GitHubOrg}/FIAPCloudGames-fase4-${Repo}:ref:refs/heads/main'
-                      - !Sub 'repo:${GitHubOrg}/FIAPCloudGames-fase4-${Repo}:ref:refs/tags/v*'
+                      - !Sub
+                        - 'repo:${GitHubOrg}@${GitHubOwnerId}/FIAPCloudGames-fase4-${Repo}@${RepoId}:ref:refs/heads/main'
+                        - RepoId: !FindInMap [EcrRepository, !Ref Repo, RepoId]
+                      - !Sub
+                        - 'repo:${GitHubOrg}@${GitHubOwnerId}/FIAPCloudGames-fase4-${Repo}@${RepoId}:ref:refs/tags/v*'
+                        - RepoId: !FindInMap [EcrRepository, !Ref Repo, RepoId]
           Policies:
             - PolicyName: ecr-push
               PolicyDocument:
