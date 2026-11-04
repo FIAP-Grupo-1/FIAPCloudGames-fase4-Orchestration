@@ -25,7 +25,12 @@ metadata:
   name: postgres
   namespace: fcg
 spec:
+  # Um pod só: o volume é ReadWriteOnce (no EKS, um EBS preso a um node) e o Postgres
+  # não aceita dois servidores no mesmo diretório de dados. Recreate derruba o pod antigo
+  # antes de subir o novo; com o RollingUpdate padrão os dois disputariam o volume.
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels: { app: postgres }
   template:
@@ -42,6 +47,10 @@ spec:
               value: "fcg123"
             - name: POSTGRES_DB
               value: "fcgdb"
+            # Subpasta do volume: um EBS novo vem com lost+found na raiz e o initdb
+            # recusa diretório não vazio.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           ports:
             - containerPort: 5432
           volumeMounts:
