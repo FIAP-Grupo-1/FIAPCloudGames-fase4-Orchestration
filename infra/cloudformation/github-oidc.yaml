@@ -6,18 +6,6 @@ Description: >
   que só pode publicar imagens no repositório ECR do próprio serviço.
 
 Parameters:
-  GitHubOrg:
-    Type: String
-    Default: FIAP-Grupo-1
-    Description: Organização/usuário dono dos repositórios no GitHub.
-  GitHubOwnerId:
-    Type: String
-    Default: '350507928'
-    AllowedPattern: '[0-9]+'
-    Description: >
-      ID numérico do dono (gh api users/<GitHubOrg> --jq .id). Faz parte do "sub" do token
-      quando o repositório usa subject imutável, então transferir os repos para outro dono
-      (como na ida para a org FIAP-Grupo-1) exige atualizar GitHubOrg e GitHubOwnerId.
   ServiceRepos:
     Type: CommaDelimitedList
     Default: UsersAPI,CatalogAPI,PaymentsAPI
@@ -35,7 +23,17 @@ Parameters:
 Conditions:
   ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, 'true']
 
+# Dono e IDs ficam em Mappings, não em Parameters: num update, o `aws cloudformation deploy`
+# reaproveita o valor atual de todo parâmetro não informado, então mudar o Default de um
+# parâmetro não teria efeito na stack existente. Mudou aqui, muda no próximo deploy.
 Mappings:
+  # Dono dos repositórios. Com subject imutável, o "sub" do token leva o nome E o ID do dono:
+  # transferir os repos de dono (como na ida para a org FIAP-Grupo-1) exige atualizar os dois.
+  # ID: gh api users/<dono> --jq .id
+  GitHub:
+    Owner:
+      Name: FIAP-Grupo-1
+      Id: '350507928'
   EcrRepository:
     UsersAPI:
       Name: fcg/users-api
@@ -88,11 +86,15 @@ Resources:
                   StringLike:
                     token.actions.githubusercontent.com:sub:
                       - !Sub
-                        - 'repo:${GitHubOrg}@${GitHubOwnerId}/FIAPCloudGames-fase4-${Repo}@${RepoId}:ref:refs/heads/main'
-                        - RepoId: !FindInMap [EcrRepository, !Ref Repo, RepoId]
+                        - 'repo:${Owner}@${OwnerId}/FIAPCloudGames-fase4-${Repo}@${RepoId}:ref:refs/heads/main'
+                        - Owner: !FindInMap [GitHub, Owner, Name]
+                          OwnerId: !FindInMap [GitHub, Owner, Id]
+                          RepoId: !FindInMap [EcrRepository, !Ref Repo, RepoId]
                       - !Sub
-                        - 'repo:${GitHubOrg}@${GitHubOwnerId}/FIAPCloudGames-fase4-${Repo}@${RepoId}:ref:refs/tags/v*'
-                        - RepoId: !FindInMap [EcrRepository, !Ref Repo, RepoId]
+                        - 'repo:${Owner}@${OwnerId}/FIAPCloudGames-fase4-${Repo}@${RepoId}:ref:refs/tags/v*'
+                        - Owner: !FindInMap [GitHub, Owner, Name]
+                          OwnerId: !FindInMap [GitHub, Owner, Id]
+                          RepoId: !FindInMap [EcrRepository, !Ref Repo, RepoId]
           Policies:
             - PolicyName: ecr-push
               PolicyDocument:
