@@ -30,6 +30,7 @@ help:
 	@echo "  make k8s-secrets  - reaplica os segredos reais do .env no cluster (New Relic e AWS)"
 	@echo "  make ecr-deploy   - cria/atualiza os repositorios ECR na AWS (stack CloudFormation $(ECR_STACK))"
 	@echo "  make ecr-outputs  - lista as URIs dos repositorios ECR criados"
+	@echo "  make budget-deploy BUDGET_EMAIL=... - alerta de custo mensal da conta (padrao US\$$ 5)"
 	@echo "  make oidc-deploy  - cria/atualiza o OIDC do GitHub e as roles de push no ECR (stack $(OIDC_STACK))"
 	@echo "  make oidc-outputs - lista os ARNs das roles (valor de AWS_ROLE_ARN em cada repo)"
 
@@ -76,6 +77,18 @@ ecr-deploy:
 ecr-outputs:
 	aws cloudformation describe-stacks --stack-name $(ECR_STACK) --region $(AWS_REGION) \
 		--query "Stacks[0].Outputs[].[OutputKey,OutputValue]" --output table
+
+# O e-mail vem da linha de comando: o repositorio e publico.
+.PHONY: budget-deploy
+BUDGET_LIMIT ?= 5
+budget-deploy:
+	@test -n "$(BUDGET_EMAIL)" || { echo "Informe o e-mail: make budget-deploy BUDGET_EMAIL=voce@exemplo.com"; exit 1; }
+	aws cloudformation deploy \
+		--template-file infra/cloudformation/budget.yaml \
+		--stack-name fcg-budget \
+		--region $(AWS_REGION) \
+		--parameter-overrides AlertEmail=$(BUDGET_EMAIL) MonthlyLimitUsd=$(BUDGET_LIMIT) \
+		--no-fail-on-empty-changeset
 
 oidc-deploy:
 	aws cloudformation deploy \
