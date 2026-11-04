@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  FCG - rede permanente do cluster EKS (stack fcg-network). Só tem recursos sem custo
+  por hora: VPC, subnets, Internet Gateway, rotas e o endpoint gateway de S3. O NAT
+  Gateway, que é cobrado por hora, fica na stack efêmera do cluster (eks.yaml).
+
+  Single AZ para os workloads: nodes e NAT ficam só na primeira AZ. A segunda AZ existe
+  porque o EKS (e um eventual ALB) exige subnets em pelo menos duas AZs; subnet vazia
+  não é cobrada.
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true # exigido pelo EKS para os nodes se registrarem
+      Tags:
+        - { Key: Name, Value: fcg }
+        - { Key: project, Value: fcg }
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - { Key: Name, Value: fcg }
+        - { Key: project, Value: fcg }
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # Públicas: /20. Só recebem o NAT e os load balancers.
+  # kubernetes.io/role/elb=1 e kubernetes.io/cluster/fcg são como o Kubernetes acha onde
+  # criar um LB voltado à internet (o nome "fcg" é o ClusterName de eks.yaml).
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 16, 12]] # 10.0.0.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name, Value: fcg-public-a }
+        - { Key: kubernetes.io/cluster/fcg, Value: shared }
+        - { Key: kubernetes.io/role/elb, Value: '1' }
+        - { Key: project, Value: fcg }
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 16, 12]] # 10.0.16.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name, Value: fcg-public-b }
+        - { Key: kubernetes.io/cluster/fcg, Value: shared }
+        - { Key: kubernetes.io/role/elb, Value: '1' }
+        - { Key: project, Value: fcg }
+
+  # Privadas: /19, porque cada pod ganha um IP da subnet (VPC CNI).
+  # 10.0.32.0/19 e 10.0.64.0/19 = blocos 1 e 2 de /19 da VPC (o bloco 0 contém as públicas).
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 8, 13]] # 10.0.32.0/19
+      Tags:
+        - { Key: Name, Value: fcg-private-a }
+        - { Key: kubernetes.io/cluster/fcg, Value: shared }
+        - { Key: kubernetes.io/role/internal-elb, Value: '1' }
+        - { Key: project, Value: fcg }
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 8, 13]] # 10.0.64.0/19
+      Tags:
+        - { Key: Name, Value: fcg-private-b }
+        - { Key: kubernetes.io/cluster/fcg, Value: shared }
+        - { Key: kubernetes.io/role/internal-elb, Value: '1' }
+        - { Key: project, Value: fcg }
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: fcg-public }
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # Uma tabela para as duas privadas. A rota 0.0.0.0/0 -> NAT é criada pela stack do
+  # cluster (eks.yaml) e some junto com ela: com o cluster desligado, não há saída.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: Name, Value: fcg-private }
+
+  PrivateSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  # Gateway endpoint é gratuito: as camadas das imagens do ECR vêm do S3 sem passar
+  # pelo NAT (que cobra por GB).
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export: { Name: fcg-network-vpc-id }
+  PublicSubnetA:
+    Value: !Ref PublicSubnetA
+    Export: { Name: fcg-network-public-subnet-a }
+  PublicSubnetB:
+    Value: !Ref PublicSubnetB
+    Export: { Name: fcg-network-public-subnet-b }
+  PrivateSubnetA:
+    Value: !Ref PrivateSubnetA
+    Export: { Name: fcg-network-private-subnet-a }
+  PrivateSubnetB:
+    Value: !Ref PrivateSubnetB
+    Export: { Name: fcg-network-private-subnet-b }
+  PrivateRouteTable:
+    Value: !Ref PrivateRouteTable
+    Export: { Name: fcg-network-private-route-table }
