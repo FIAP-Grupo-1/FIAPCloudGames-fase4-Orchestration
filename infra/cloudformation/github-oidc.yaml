@@ -8,15 +8,16 @@ Description: >
 Parameters:
   GitHubOrg:
     Type: String
-    Default: joao-malvetoni-alta-horizon
+    Default: FIAP-Grupo-1
     Description: Organização/usuário dono dos repositórios no GitHub.
   GitHubOwnerId:
     Type: String
-    Default: '245437274'
+    Default: '350507928'
     AllowedPattern: '[0-9]+'
     Description: >
       ID numérico do dono (gh api users/<GitHubOrg> --jq .id). Faz parte do "sub" do token
-      quando o repositório usa subject imutável.
+      quando o repositório usa subject imutável, então transferir os repos para outro dono
+      (como na ida para a org FIAP-Grupo-1) exige atualizar GitHubOrg e GitHubOwnerId.
   ServiceRepos:
     Type: CommaDelimitedList
     Default: UsersAPI,CatalogAPI,PaymentsAPI
