@@ -691,8 +691,12 @@ make cluster-down          # derruba o cluster (10-15 min); a rede fica
 ```
 
 - **Endpoint da API público**, porque os runners do GitHub Actions (IPs dinâmicos) fazem o deploy com
-  `kubectl`. Quem protege é a autenticação IAM: quem roda o `cluster-up` vira admin, e as roles
-  `fcg-gha-*` do CI só editam o namespace `fcg`.
+  `kubectl`. Quem protege é a autenticação IAM (access entries): as roles `fcg-gha-*` do CI só editam o
+  namespace `fcg`. Com a stack `fcg-team-access` aplicada, todo usuário `fcg-<membro>` vira admin do
+  cluster, não importa quem rodou o `cluster-up`; sem ela, só quem criou o cluster.
+- **Pod Identity:** se a stack `fcg-workload-access` (segredos e roles dos pods) existir, o `cluster-up` já
+  sobe a `fcg-pod-identity`, e o `cluster-down` a remove antes do cluster. Depois do `cluster-up`, os
+  workloads sobem com `make workloads-deploy` (ver `docs/eks-workloads-e-segredos.md`).
 - **Prefix delegation** no VPC CNI: sem ela um `t3.medium` aceita só 17 pods. O `cluster-up` mostra a
   capacidade de pods de cada node no final.
 - **`cluster-down` apaga o namespace `fcg` antes da stack.** O NLB do Kong e os volumes EBS são criados

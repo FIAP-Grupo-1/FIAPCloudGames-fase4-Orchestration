@@ -37,6 +37,28 @@ Parameters:
     Description: >
       Roles do GitHub Actions (github-oidc.yaml) que ganham acesso de edição ao namespace
       fcg, para o deploy pela pipeline.
+  # Os três abaixo são preenchidos pelo scripts/aws/cluster-up.sh a partir da stack
+  # fcg-team-access (team-access.yaml), se ela existir.
+  TeamAccess:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: true quando a stack fcg-team-access existe (usuários IAM fcg-<membro>).
+  TeamMembers:
+    Type: CommaDelimitedList
+    Default: anderson,pedro,carlos,joao,leonardo
+    Description: Mesmo valor do parâmetro Members de team-access.yaml.
+  BootstrapCreatorAdmin:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Admin automático para quem cria o cluster. false quando o criador já é um dos
+      fcg-<membro>: ele já ganha a access entry abaixo, e o EKS não aceita duas para o
+      mesmo usuário. Só vale na criação do cluster.
+
+Conditions:
+  TeamAccessEnabled: !Equals [!Ref TeamAccess, 'true']
 
 Resources:
   # -------------------------------------------------------------- saída para a internet
@@ -87,8 +109,8 @@ Resources:
       BootstrapSelfManagedAddons: false
       AccessConfig:
         AuthenticationMode: API
-        # Quem roda o cluster-up vira admin do cluster.
-        BootstrapClusterCreatorAdminPermissions: true
+        # Quem roda o cluster-up vira admin do cluster (ver BootstrapCreatorAdmin).
+        BootstrapClusterCreatorAdminPermissions: !Equals [!Ref BootstrapCreatorAdmin, 'true']
       ResourcesVpcConfig:
         # As ENIs do control plane vão nas duas privadas: o EKS exige 2 AZs.
         SubnetIds:
@@ -195,6 +217,23 @@ Resources:
               AccessScope:
                 Type: namespace
                 Namespaces: [fcg]
+
+  # -------------------------------------------------------------- acesso do grupo
+  # Com um usuário IAM por integrante (team-access.yaml), o admin automático só cobriria
+  # quem criou o cluster; os outros ficariam sem kubectl. Cada fcg-<membro> vira admin.
+  Fn::ForEach::TeamAccess:
+    - Member
+    - !Ref TeamMembers
+    - 'TeamAccessEntry&{Member}':
+        Type: AWS::EKS::AccessEntry
+        Condition: TeamAccessEnabled
+        Properties:
+          ClusterName: !Ref Cluster
+          PrincipalArn: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:user/fcg-${Member}'
+          AccessPolicies:
+            - PolicyArn: !Sub 'arn:${AWS::Partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy'
+              AccessScope:
+                Type: cluster
 
 Outputs:
   ClusterName:

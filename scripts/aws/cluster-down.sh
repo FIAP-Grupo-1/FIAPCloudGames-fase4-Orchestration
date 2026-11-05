@@ -10,6 +10,9 @@
 # orfaos, cobrando sozinhos. Por isso apagamos antes o namespace fcg: o finalizer
 # do Service espera o LB sumir, e o PVC leva o volume junto (reclaimPolicy Delete).
 # Os dados do Postgres somem com ele.
+#
+# A stack fcg-pod-identity (agente e associacoes) importa o cluster e precisa sair
+# antes da fcg-eks; senao fica orfa e o proximo pod-identity-deploy falha.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +21,7 @@ source "$SCRIPT_DIR/../k8s/common.sh"
 
 REGION="${AWS_REGION:-us-east-1}"
 EKS_STACK="${EKS_STACK:-fcg-eks}"
+POD_IDENTITY_STACK="${POD_IDENTITY_STACK:-fcg-pod-identity}"
 CLUSTER_NAME="${CLUSTER_NAME:-fcg}"
 NAMESPACE="fcg"
 
@@ -30,20 +34,28 @@ if ! aws cloudformation describe-stacks --stack-name "$EKS_STACK" --region "$REG
 fi
 
 if aws eks describe-cluster --name "$CLUSTER_NAME" --region "$REGION" >/dev/null 2>&1; then
-  echo "==> [1/3] Removendo os recursos criados pelo Kubernetes (LB e volumes)"
+  echo "==> [1/4] Removendo os recursos criados pelo Kubernetes (LB e volumes)"
   aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$REGION" --alias fcg-eks >/dev/null
   kubectl --context fcg-eks delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=10m
   # O PV (e o volume EBS por tras) e apagado de forma assincrona depois do PVC.
   kubectl --context fcg-eks wait --for=delete pv --all --timeout=5m 2>/dev/null || true
 else
-  echo "==> [1/3] Cluster nao responde; pulando a limpeza pelo kubectl"
+  echo "==> [1/4] Cluster nao responde; pulando a limpeza pelo kubectl"
 fi
 
-echo "==> [2/3] Apagando a stack $EKS_STACK - leva de 10 a 15 minutos"
+if aws cloudformation describe-stacks --stack-name "$POD_IDENTITY_STACK" --region "$REGION" >/dev/null 2>&1; then
+  echo "==> [2/4] Apagando a stack $POD_IDENTITY_STACK"
+  aws cloudformation delete-stack --stack-name "$POD_IDENTITY_STACK" --region "$REGION"
+  aws cloudformation wait stack-delete-complete --stack-name "$POD_IDENTITY_STACK" --region "$REGION"
+else
+  echo "==> [2/4] $POD_IDENTITY_STACK nao existe; nada a apagar"
+fi
+
+echo "==> [3/4] Apagando a stack $EKS_STACK - leva de 10 a 15 minutos"
 aws cloudformation delete-stack --stack-name "$EKS_STACK" --region "$REGION"
 aws cloudformation wait stack-delete-complete --stack-name "$EKS_STACK" --region "$REGION"
 
-echo "==> [3/3] Procurando sobras que continuariam cobrando"
+echo "==> [4/4] Procurando sobras que continuariam cobrando"
 leftovers="$(aws resourcegroupstaggingapi get-resources --region "$REGION" \
   --tag-filters "Key=kubernetes.io/cluster/$CLUSTER_NAME,Values=owned" \
   --query 'ResourceTagMappingList[].ResourceARN' --output text)"

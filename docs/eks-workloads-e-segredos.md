@@ -60,13 +60,15 @@ As associações ServiceAccount → role ficam em `infra/cloudformation/pod-iden
 
 ```bash
 make secrets-deploy        # uma vez: segredos + roles (permanente, ~US$ 1,60/mês)
-make cluster-up            # cluster efêmero (15-20 min)
-make pod-identity-deploy   # agente do Pod Identity + associações
+make cluster-up            # cluster efêmero + Pod Identity (15-20 min)
 make workloads-deploy      # ESO, Secrets, APIs com imagens do ECR, NLB do Kong
-# ao terminar (nesta ordem):
-make pod-identity-down
-make cluster-down
+# ao terminar:
+make cluster-down          # namespace fcg, Pod Identity e cluster, nesta ordem
 ```
+
+O `cluster-up` sobe a stack `fcg-pod-identity` sozinho quando a `fcg-workload-access` já existe, e o
+`cluster-down` a remove antes da `fcg-eks`. `make pod-identity-deploy` / `pod-identity-down` continuam
+disponíveis para rodar separadamente.
 
 `make workloads-deploy` (`scripts/aws/deploy-workloads.sh`) só roda no contexto `fcg-eks`, usa a tag mais recente
 de cada repositório ECR (ou `USERS_API_TAG`/`CATALOG_API_TAG`/`PAYMENTS_API_TAG`) e termina mostrando o DNS do NLB.
