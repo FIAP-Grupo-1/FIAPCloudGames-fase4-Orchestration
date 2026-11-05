@@ -38,6 +38,10 @@ spec:
               valueFrom: { secretKeyRef: { name: fcg-secrets, key: JwtSettings__SecretKey } }
             - name: ConnectionStrings__DefaultConnection
               valueFrom: { secretKeyRef: { name: fcg-secrets, key: Users__ConnectionString } }
+            # Cache de usuarios (k8s/12-redis.yaml). Sem esta variavel o app tenta
+            # localhost:6379 e o cache nunca funciona no cluster.
+            - name: ConnectionStrings__Redis
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: Users__RedisConnection } }
             # Ativa o profiler do CLR. Sem estas 4 variaveis o pacote NewRelic.Agent
             # fica instalado em /app/newrelic mas NUNCA e carregado (agente inerte).
             # O GUID precisa de aspas: sem elas o YAML leria {..} como um mapa.
