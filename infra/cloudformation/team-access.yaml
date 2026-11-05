@@ -1,0 +1,65 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::LanguageExtensions
+Description: >
+  FCG - um usuario IAM por integrante do grupo, no lugar do usuario compartilhado
+  fcg-fiap-aws. Console so com MFA; CLI com access key propria de cada um (quem sai
+  do grupo perde o acesso sem afetar os outros, e o CloudTrail mostra quem fez o que).
+
+Parameters:
+  Members:
+    Type: CommaDelimitedList
+    Default: anderson,pedro,carlos,joao,leonardo
+    Description: Sufixo do usuario IAM (fcg-<membro>).
+
+Resources:
+  # Admin da conta de estudo: CloudFormation cria roles, EKS, ECR etc. Restringir mais
+  # que isso travaria o IaC do grupo; o ganho aqui e identidade individual + MFA.
+  TeamGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: fcg-team
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Policies:
+        - PolicyName: console-exige-mfa
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Sem MFA, o console so permite cadastrar o MFA e trocar a senha.
+              # `Bool` (e nao `BoolIfExists`) de proposito: chamada com access key nao
+              # tem a chave aws:MultiFactorAuthPresent, entao a CLI segue funcionando.
+              - Sid: BloqueiaConsoleSemMfa
+                Effect: Deny
+                NotAction:
+                  - iam:CreateVirtualMFADevice
+                  - iam:EnableMFADevice
+                  - iam:GetUser
+                  - iam:ListMFADevices
+                  - iam:ListVirtualMFADevices
+                  - iam:ResyncMFADevice
+                  - iam:ChangePassword
+                  - iam:GetAccountPasswordPolicy
+                  - sts:GetSessionToken
+                Resource: '*'
+                Condition:
+                  Bool:
+                    aws:MultiFactorAuthPresent: 'false'
+
+  Fn::ForEach::Members:
+    - Member
+    - !Ref Members
+    - 'User${Member}':
+        Type: AWS::IAM::User
+        Properties:
+          UserName: !Sub 'fcg-${Member}'
+          Groups:
+            - !Ref TeamGroup
+          # Senha inicial e access key ficam FORA do template (nao podem ir para o git):
+          #   aws iam create-login-profile --user-name fcg-<membro> \
+          #     --password '<senha temporaria>' --password-reset-required
+          #   aws iam create-access-key --user-name fcg-<membro>   (cada um, no proprio terminal)
+
+Outputs:
+  ConsoleUrl:
+    Description: Link de login do console para os usuarios do grupo
+    Value: !Sub 'https://${AWS::AccountId}.signin.aws.amazon.com/console'

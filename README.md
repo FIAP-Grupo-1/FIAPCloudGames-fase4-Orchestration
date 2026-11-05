@@ -626,6 +626,21 @@ docker push "$REGISTRY/fcg/users-api:sha-$(git rev-parse --short HEAD)"
 > Remover a stack **não** apaga repositórios que ainda tenham imagens: o CloudFormation falha no delete.
 > É proposital. Esvazie o repositório antes, se a remoção for mesmo intencional.
 
+### Alerta de custo (`budget.yaml`)
+
+Um AWS Budget da conta inteira, de **US$ 5/mês**, avisa por e-mail quando o gasto real passa de 80% e
+de 100%, e quando a previsão do mês passa de 100%. Serve para pegar um cluster EKS esquecido ligado.
+**O budget só avisa, não desliga nada**: se o alerta chegar, confira com `make cluster-status` e
+derrube com `make cluster-down`.
+
+```bash
+export AWS_PROFILE=fcg
+make budget-deploy BUDGET_EMAIL=voce@exemplo.com              # limite padrão: US$ 5
+make budget-deploy BUDGET_EMAIL=voce@exemplo.com BUDGET_LIMIT=10
+```
+
+O e-mail não fica no repositório (que é público): entra só como parâmetro no deploy.
+
 ### Acesso do GitHub Actions ao ECR (`github-oidc.yaml`)
 
 Os workflows de CI/CD dos serviços publicam imagens no ECR **sem access key guardada no GitHub**: o job

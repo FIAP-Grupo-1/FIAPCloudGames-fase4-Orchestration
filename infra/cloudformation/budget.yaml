@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  FCG - alerta de custo da conta do grupo (stack fcg-budget). Avisa por e-mail quando o
+  gasto do mês passa do limite, para um cluster EKS esquecido ligado não virar surpresa
+  na fatura. O budget só avisa: ele não desliga nada.
+
+Parameters:
+  MonthlyLimitUsd:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    Description: Limite mensal em dólares (conta inteira, todos os serviços).
+  AlertEmail:
+    Type: String
+    AllowedPattern: '[^@\s]+@[^@\s]+\.[^@\s]+'
+    ConstraintDescription: precisa ser um e-mail válido.
+    Description: >
+      Quem recebe os alertas. Sem default de propósito: o repositório é público, então o
+      e-mail entra só no deploy (make budget-deploy BUDGET_EMAIL=...).
+
+Resources:
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: fcg-mensal
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyLimitUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        # 80% do gasto real: hora de conferir se o cluster ficou ligado.
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - { SubscriptionType: EMAIL, Address: !Ref AlertEmail }
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - { SubscriptionType: EMAIL, Address: !Ref AlertEmail }
+        # Previsão: avisa antes de estourar, pelo ritmo de gasto do mês.
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - { SubscriptionType: EMAIL, Address: !Ref AlertEmail }

@@ -1,0 +1,21 @@
+# Porta de entrada publica no EKS: um NLB na frente do Kong. O Kong roteia por path
+# (/users, /catalog, /payments), entao o DNS do NLB serve direto, sem hosts *.fcg.local.
+# O kong-proxy (ClusterIP, k8s/24-kong.yaml) continua para o Minikube e o Prometheus.
+#
+# Criado pelo controlador de Service do proprio EKS (sem AWS Load Balancer Controller).
+# O NLB e cobrado por hora: o `cluster-down` apaga o namespace fcg antes da stack,
+# o que remove este Service e o NLB junto.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong-public
+  namespace: fcg
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+spec:
+  type: LoadBalancer
+  selector: { app: kong }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000

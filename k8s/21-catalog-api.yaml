@@ -5,6 +5,10 @@ metadata:
   namespace: fcg
 spec:
   replicas: 2
+  # Zero downtime no deploy: o pod novo precisa ficar Ready antes de um antigo sair.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
   selector:
     matchLabels: { app: catalog-api }
   template:
@@ -64,6 +68,11 @@ spec:
             - name: NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED
               value: "true"
           # Catálogo não expõe /health: sonda TCP na porta 8080.
+          # Requests dimensionados para caber em 2 nodes t3.medium (EKS) com folga para o
+          # maxSurge; sem limite de CPU para nao estrangular o startup do .NET.
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
           livenessProbe:
             tcpSocket: { port: 8080 }
             initialDelaySeconds: 20

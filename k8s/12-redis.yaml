@@ -26,6 +26,9 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: Redis__Password } }
           # ACL em vez de `--requirepass`: a connection string do StackExchange.Redis
           # manda `user=fcg,password=...`, e usuario nomeado so existe via ACL.
           # `default off` fecha o acesso anonimo -- sem isso qualquer pod do cluster
@@ -40,7 +43,8 @@ spec:
             - --user
             - fcg
             - "on"
-            - ">fcg123"
+            # $(REDIS_PASSWORD) e expandido pelo kubelet a partir do env acima.
+            - ">$(REDIS_PASSWORD)"
             - "~*"
             - "&*"
             - "+@all"
@@ -51,15 +55,15 @@ spec:
           ports:
             - containerPort: 6379
           # `PING` tambem exige autenticacao com o default desligado, entao a sonda
-          # entra com as mesmas credenciais da aplicacao.
+          # entra com as mesmas credenciais da aplicacao (via sh: exec nao expande $(VAR)).
           livenessProbe:
             exec:
-              command: ["redis-cli", "--user", "fcg", "--pass", "fcg123", "--no-auth-warning", "ping"]
+              command: ["sh", "-c", "redis-cli --user fcg --pass \"$REDIS_PASSWORD\" --no-auth-warning ping"]
             initialDelaySeconds: 15
             periodSeconds: 15
           readinessProbe:
             exec:
-              command: ["redis-cli", "--user", "fcg", "--pass", "fcg123", "--no-auth-warning", "ping"]
+              command: ["sh", "-c", "redis-cli --user fcg --pass \"$REDIS_PASSWORD\" --no-auth-warning ping"]
             initialDelaySeconds: 5
             periodSeconds: 10
 ---
