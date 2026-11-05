@@ -14,8 +14,10 @@ NAMESPACE ?= fcg
 AWS_REGION ?= us-east-1
 ECR_STACK ?= fcg-ecr
 OIDC_STACK ?= fcg-github-oidc
+SECRETS_STACK ?= fcg-workload-access
+POD_IDENTITY_STACK ?= fcg-pod-identity
 
-.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs
+.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs secrets-deploy pod-identity-deploy pod-identity-down
 
 help:
 	@echo "Comandos disponiveis:"
@@ -30,6 +32,9 @@ help:
 	@echo "  make k8s-secrets  - reaplica os segredos reais do .env no cluster (New Relic e AWS)"
 	@echo "  make ecr-deploy   - cria/atualiza os repositorios ECR na AWS (stack CloudFormation $(ECR_STACK))"
 	@echo "  make ecr-outputs  - lista as URIs dos repositorios ECR criados"
+	@echo "  make secrets-deploy      - cria/atualiza os segredos fcg/eks/* e as roles dos pods (stack $(SECRETS_STACK))"
+	@echo "  make pod-identity-deploy - liga as roles as ServiceAccounts do cluster (depois do cluster-up)"
+	@echo "  make pod-identity-down   - remove a Pod Identity (ANTES do cluster-down)"
 	@echo "  make budget-deploy BUDGET_EMAIL=... - alerta de custo mensal da conta (padrao US\$$ 5)"
 	@echo "  make oidc-deploy  - cria/atualiza o OIDC do GitHub e as roles de push no ECR (stack $(OIDC_STACK))"
 	@echo "  make oidc-outputs - lista os ARNs das roles (valor de AWS_ROLE_ARN em cada repo)"
@@ -77,6 +82,19 @@ ecr-deploy:
 ecr-outputs:
 	aws cloudformation describe-stacks --stack-name $(ECR_STACK) --region $(AWS_REGION) \
 		--query "Stacks[0].Outputs[].[OutputKey,OutputValue]" --output table
+
+# Segredos gerados pelo proprio Secrets Manager (ninguem digita senha) e as roles
+# que os pods assumem via Pod Identity. Permanente: IAM nao cobra, segredo ~US$ 0,40/mes.
+secrets-deploy:
+	aws cloudformation deploy 		--template-file infra/cloudformation/workload-access.yaml 		--stack-name $(SECRETS_STACK) 		--region $(AWS_REGION) 		--capabilities CAPABILITY_NAMED_IAM 		--no-fail-on-empty-changeset
+
+# Efemera como o cluster: depende do fcg-eks e precisa sair antes dele.
+pod-identity-deploy:
+	aws cloudformation deploy 		--template-file infra/cloudformation/pod-identity.yaml 		--stack-name $(POD_IDENTITY_STACK) 		--region $(AWS_REGION) 		--no-fail-on-empty-changeset
+
+pod-identity-down:
+	aws cloudformation delete-stack --stack-name $(POD_IDENTITY_STACK) --region $(AWS_REGION)
+	aws cloudformation wait stack-delete-complete --stack-name $(POD_IDENTITY_STACK) --region $(AWS_REGION)
 
 # O e-mail vem da linha de comando: o repositorio e publico.
 .PHONY: budget-deploy
