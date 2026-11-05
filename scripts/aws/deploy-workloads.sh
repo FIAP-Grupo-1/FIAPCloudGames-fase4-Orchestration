@@ -28,8 +28,8 @@ cd "$ROOT_DIR"
 REGION="${AWS_REGION:-us-east-1}"
 NAMESPACE="${NAMESPACE:-fcg}"
 EXPECTED_CONTEXT="${EXPECTED_CONTEXT:-fcg-eks}"
-# Vazio = ultima versao do chart (o script mostra qual instalou). Fixe depois de validar.
-ESO_VERSION="${ESO_VERSION:-}"
+# Versao do chart fixada (CRDs servem external-secrets.io/v1, usada em k8s/aws/workloads/).
+ESO_VERSION="${ESO_VERSION:-2.14.0}"
 
 # Trava de seguranca: as imagens do ECR nao existem no Minikube e vice-versa.
 context="$(kubectl config current-context)"
