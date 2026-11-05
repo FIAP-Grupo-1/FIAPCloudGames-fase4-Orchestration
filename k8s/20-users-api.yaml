@@ -5,12 +5,19 @@ metadata:
   namespace: fcg
 spec:
   replicas: 2
+  # Zero downtime no deploy: o pod novo precisa ficar Ready antes de um antigo sair.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
   selector:
     matchLabels: { app: users-api }
   template:
     metadata:
       labels: { app: users-api }
     spec:
+      # No EKS esta ServiceAccount recebe a role IAM via Pod Identity (sns:Publish);
+      # ver infra/cloudformation/pod-identity.yaml.
+      serviceAccountName: users-api
       containers:
         - name: users-api
           image: fcg/users-api:1.0
@@ -30,10 +37,12 @@ spec:
               valueFrom: { configMapKeyRef: { name: fcg-config, key: Sns__UserEventsTopicArn } }
             - name: AWS_REGION
               valueFrom: { configMapKeyRef: { name: fcg-config, key: AWS_REGION } }
+            # Opcional: so o Minikube usa access key (scripts/k8s/secrets.sh). No EKS o
+            # fcg-secrets nao tem estas chaves e o SDK usa a credencial do Pod Identity.
             - name: AWS_ACCESS_KEY_ID
-              valueFrom: { secretKeyRef: { name: fcg-secrets, key: AWS_ACCESS_KEY_ID } }
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: AWS_ACCESS_KEY_ID, optional: true } }
             - name: AWS_SECRET_ACCESS_KEY
-              valueFrom: { secretKeyRef: { name: fcg-secrets, key: AWS_SECRET_ACCESS_KEY } }
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: AWS_SECRET_ACCESS_KEY, optional: true } }
             - name: JwtSettings__SecretKey
               valueFrom: { secretKeyRef: { name: fcg-secrets, key: JwtSettings__SecretKey } }
             - name: ConnectionStrings__DefaultConnection
@@ -64,6 +73,11 @@ spec:
             - name: NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED
               value: "true"
           # Usuários não expõe /health: sonda TCP na porta 8080.
+          # Requests dimensionados para caber em 2 nodes t3.medium (EKS) com folga para o
+          # maxSurge; sem limite de CPU para nao estrangular o startup do .NET.
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
           livenessProbe:
             tcpSocket: { port: 8080 }
             initialDelaySeconds: 20
