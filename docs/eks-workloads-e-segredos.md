@@ -73,8 +73,26 @@ de cada repositório ECR (ou `USERS_API_TAG`/`CATALOG_API_TAG`/`PAYMENTS_API_TAG
 Depende de `aws`, `kubectl` e `helm`.
 
 **Zero downtime:** APIs e Kong usam `RollingUpdate` com `maxUnavailable: 0` e `maxSurge: 1`. Um pod novo só
-recebe tráfego depois de passar na readiness probe, e só então um antigo sai. Para provar no vídeo, deixe um loop
-de `curl` no DNS do NLB enquanto a pipeline faz o rollout.
+recebe tráfego depois de passar na readiness probe, e só então um antigo sai. Na saída, as APIs fazem um `preStop`
+de 5 s: o pod continua atendendo enquanto o Service o tira da lista de endpoints, então nenhuma requisição cai num
+pod que já fechou a porta.
+
+### Roteiro do vídeo: provar o zero downtime
+
+`make zero-downtime-check` (`scripts/aws/zero-downtime-check.sh`) faz uma requisição por segundo no NLB → Kong →
+API e, no fim, mostra quantas deram 2xx e quantas falharam (sai com erro se alguma falhar). Com um usuário de
+teste, ele faz login uma vez e usa o JWT em `/catalog/api/v1/games`. Assim a requisição chega mesmo à API, e não
+para no plugin JWT do Kong. Sem credenciais, testa só `/payments/health`.
+
+1. Cadastre um usuário de teste (`POST /users/api/users/register`) e exporte as credenciais **só no terminal**:
+   `export ZD_EMAIL=... ZD_PASSWORD=...` (nunca no repositório).
+2. Terminal 1: `make zero-downtime-check` (padrão de 180 s; `DURATION=300` para pipelines mais longas).
+3. Terminal 2: `kubectl get pods -n fcg -w`, para mostrar os pods novos subindo e os antigos saindo.
+4. Dispare o deploy: push no `main` do CatalogAPI (pipeline do Carlos) ou, para ensaiar,
+   `kubectl -n fcg rollout restart deployment/catalog-api`.
+5. Mostre o resumo do terminal 1: `erros: 0` → **ZERO DOWNTIME**.
+
+Um `429` é o rate limit do Kong (120 req/min por cliente), não uma queda; se aparecer, aumente o `INTERVAL`.
 
 ## NoSQL: DynamoDB do NotificationsAPI
 
