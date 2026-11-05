@@ -39,7 +39,7 @@ spec:
             - name: POSTGRES_USER
               value: "fcg"
             - name: POSTGRES_PASSWORD
-              value: "fcg123"
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: Postgres__Password } }
             - name: POSTGRES_DB
               value: "fcgdb"
           ports:
