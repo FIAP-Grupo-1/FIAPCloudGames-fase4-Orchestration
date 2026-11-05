@@ -50,7 +50,7 @@ FIAPCloudGames-fase3-Orchestration/   # este repo (nome padrão do git clone)
 ├── notifications-local/ # NotificationsAPI só local: Dockerfile da Lambda + init do DynamoDB
 ├── observability/       # secret/manifestos de New Relic
 ├── docs/                # documentação de observabilidade
-├── infra/cloudformation/ # IaC na AWS (ECR; VPC/EKS em seguida)
+├── infra/cloudformation/ # IaC na AWS: ECR, OIDC do CI, VPC e EKS
 ├── scripts/             # automação (k8s/, kong/ e validate-tracing.sh)
 └── templates/           # modelos de Dockerfile e /k8s por serviço
 ```
@@ -664,6 +664,49 @@ make oidc-outputs                    # ARN de cada role
 Depois, em cada repositório de serviço, um admin cadastra o ARN como **variável** (não secret) do Actions:
 `Settings > Secrets and variables > Actions > Variables > AWS_ROLE_ARN`. O ARN não é segredo, mas fica fora
 do código para não fixar a conta no workflow.
+
+### Rede e cluster EKS (`vpc.yaml` + `eks.yaml`)
+
+![Arquitetura AWS](docs/arquitetura-aws.png)
+
+(Fonte editável: `docs/arquitetura-aws.drawio`, abre no draw.io.)
+
+**Single AZ.** Nodes e NAT ficam só na primeira AZ da região. A segunda AZ só tem subnets vazias,
+porque o EKS exige subnets em pelo menos duas AZs. Subnet vazia não é cobrada. Alta disponibilidade
+não é requisito do TC, então redundância entre AZs só custaria dinheiro.
+
+| Stack | O que tem | Quando existe |
+|---|---|---|
+| `fcg-network` (`vpc.yaml`) | VPC `10.0.0.0/16`, 2 subnets públicas `/20`, 2 privadas `/19`, Internet Gateway, endpoint S3 (gateway, gratuito) | sempre (~US$ 0) |
+| `fcg-eks` (`eks.yaml`) | NAT Gateway, cluster EKS, node group (1–2× `t3.medium`), add-ons, acesso do CI | **só quando ligado**: cobrado por hora |
+
+O cluster é **efêmero**: o EKS cobra por hora (US$ 0,10/h só o control plane), não por mês. Ligado o
+mês inteiro custaria ~US$ 160; com ~20 h de uso, uns US$ 5.
+
+```bash
+export AWS_PROFILE=fcg     # conta do grupo (ver aviso acima)
+make cluster-up            # rede + cluster + kubectl (15-20 min)
+make cluster-status        # está ligado?
+make cluster-down          # derruba o cluster (10-15 min); a rede fica
+```
+
+- **Endpoint da API público**, porque os runners do GitHub Actions (IPs dinâmicos) fazem o deploy com
+  `kubectl`. Quem protege é a autenticação IAM (access entries): as roles `fcg-gha-*` do CI só editam o
+  namespace `fcg`. Com a stack `fcg-team-access` aplicada, todo usuário `fcg-<membro>` vira admin do
+  cluster, não importa quem rodou o `cluster-up`; sem ela, só quem criou o cluster.
+- **Pod Identity:** se a stack `fcg-workload-access` (segredos e roles dos pods) existir, o `cluster-up` já
+  sobe a `fcg-pod-identity`, e o `cluster-down` a remove antes do cluster. Depois do `cluster-up`, os
+  workloads sobem com `make workloads-deploy` (ver `docs/eks-workloads-e-segredos.md`).
+- **Prefix delegation** no VPC CNI: sem ela um `t3.medium` aceita só 17 pods. O `cluster-up` mostra a
+  capacidade de pods de cada node no final.
+- **`cluster-down` apaga o namespace `fcg` antes da stack.** O NLB do Kong e os volumes EBS são criados
+  pelo Kubernetes, não pelo CloudFormation, e sobrariam cobrando. Os **dados do Postgres somem** a cada
+  ciclo, e o catálogo volta vazio (ver [O catálogo nasce vazio](#o-catálogo-nasce-vazio)). No fim, o
+  script procura recursos que sobraram com a tag do cluster e falha se achar algum.
+- O `cluster-up` deixa o `kubectl` apontando para o EKS (contexto `fcg-eks`). Para voltar ao Minikube:
+  `kubectl config use-context minikube`.
+- `k8s/aws/` tem os manifestos que só valem no EKS (StorageClass `gp3` padrão). O `kubectl apply -f k8s/`
+  do Minikube não entra nessa pasta.
 
 ## Como fazer deploy no Kubernetes (Minikube)
 

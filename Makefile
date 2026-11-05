@@ -17,7 +17,7 @@ OIDC_STACK ?= fcg-github-oidc
 SECRETS_STACK ?= fcg-workload-access
 POD_IDENTITY_STACK ?= fcg-pod-identity
 
-.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs secrets-deploy pod-identity-deploy pod-identity-down workloads-deploy zero-downtime-check team-access-deploy
+.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs cluster-up cluster-down cluster-status secrets-deploy pod-identity-deploy pod-identity-down workloads-deploy zero-downtime-check team-access-deploy
 
 help:
 	@echo "Comandos disponiveis:"
@@ -33,14 +33,17 @@ help:
 	@echo "  make ecr-deploy   - cria/atualiza os repositorios ECR na AWS (stack CloudFormation $(ECR_STACK))"
 	@echo "  make ecr-outputs  - lista as URIs dos repositorios ECR criados"
 	@echo "  make secrets-deploy      - cria/atualiza os segredos fcg/eks/* e as roles dos pods (stack $(SECRETS_STACK))"
-	@echo "  make pod-identity-deploy - liga as roles as ServiceAccounts do cluster (depois do cluster-up)"
-	@echo "  make pod-identity-down   - remove a Pod Identity (ANTES do cluster-down)"
+	@echo "  make pod-identity-deploy - liga as roles as ServiceAccounts (o cluster-up ja roda)"
+	@echo "  make pod-identity-down   - remove a Pod Identity (o cluster-down ja roda)"
 	@echo "  make workloads-deploy    - sobe ESO, segredos e as APIs no EKS com imagens do ECR"
 	@echo "  make zero-downtime-check - curl em loop no NLB durante um rollout (ZD_EMAIL/ZD_PASSWORD p/ rota com JWT)"
 	@echo "  make team-access-deploy  - um usuario IAM por integrante, console so com MFA (stack fcg-team-access)"
 	@echo "  make budget-deploy BUDGET_EMAIL=... - alerta de custo mensal da conta (padrao US\$$ 5)"
 	@echo "  make oidc-deploy  - cria/atualiza o OIDC do GitHub e as roles de push no ECR (stack $(OIDC_STACK))"
 	@echo "  make oidc-outputs - lista os ARNs das roles (valor de AWS_ROLE_ARN em cada repo)"
+	@echo "  make cluster-up   - sobe a rede e o cluster EKS efemero (15-20 min, cobrado por hora)"
+	@echo "  make cluster-down - derruba o cluster EKS (limpa LB e volumes antes; a rede fica)"
+	@echo "  make cluster-status - mostra se o cluster esta ligado"
 
 k8s-start:
 	@echo "==> Iniciando o cluster Minikube"
@@ -135,3 +138,14 @@ oidc-deploy:
 oidc-outputs:
 	aws cloudformation describe-stacks --stack-name $(OIDC_STACK) --region $(AWS_REGION) \
 		--query "Stacks[0].Outputs[].[OutputKey,OutputValue]" --output table
+
+cluster-up:
+	@$(BASH) scripts/aws/cluster-up.sh
+
+cluster-down:
+	@$(BASH) scripts/aws/cluster-down.sh
+
+cluster-status:
+	@aws cloudformation describe-stacks --stack-name fcg-eks --region $(AWS_REGION) \
+		--query "Stacks[0].[StackName,StackStatus,CreationTime]" --output text 2>/dev/null \
+		|| echo "fcg-eks: desligado"

@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::LanguageExtensions
+Description: >
+  FCG - cluster EKS efêmero (stack fcg-eks). Tudo aqui é cobrado por hora (control plane,
+  NAT Gateway, nodes), então a stack só existe enquanto o grupo usa o cluster:
+  make cluster-up / make cluster-down. Depende da rede permanente (vpc.yaml, stack
+  fcg-network).
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: fcg
+    Description: Precisa bater com a tag kubernetes.io/cluster/<nome> das subnets em vpc.yaml.
+  KubernetesVersion:
+    Type: String
+    Default: '1.37'
+    Description: Versão em suporte padrão (aws eks describe-cluster-versions).
+  NodeInstanceType:
+    Type: String
+    Default: t3.medium
+  NodeDesiredSize:
+    Type: Number
+    Default: 2
+    MinValue: 1
+  NodeMaxSize:
+    Type: Number
+    Default: 3
+    MinValue: 1
+  NodeCapacityType:
+    Type: String
+    Default: ON_DEMAND
+    AllowedValues: [ON_DEMAND, SPOT]
+    Description: SPOT custa ~70% menos, mas a AWS pode tirar o node a qualquer momento.
+  CiRoleNames:
+    Type: CommaDelimitedList
+    Default: fcg-gha-users-api,fcg-gha-catalog-api,fcg-gha-payments-api
+    Description: >
+      Roles do GitHub Actions (github-oidc.yaml) que ganham acesso de edição ao namespace
+      fcg, para o deploy pela pipeline.
+  # Os três abaixo são preenchidos pelo scripts/aws/cluster-up.sh a partir da stack
+  # fcg-team-access (team-access.yaml), se ela existir.
+  TeamAccess:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: true quando a stack fcg-team-access existe (usuários IAM fcg-<membro>).
+  TeamMembers:
+    Type: CommaDelimitedList
+    Default: anderson,pedro,carlos,joao,leonardo
+    Description: Mesmo valor do parâmetro Members de team-access.yaml.
+  BootstrapCreatorAdmin:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Admin automático para quem cria o cluster. false quando o criador já é um dos
+      fcg-<membro>: ele já ganha a access entry abaixo, e o EKS não aceita duas para o
+      mesmo usuário. Só vale na criação do cluster.
+
+Conditions:
+  TeamAccessEnabled: !Equals [!Ref TeamAccess, 'true']
+
+Resources:
+  # -------------------------------------------------------------- saída para a internet
+  # NAT só na AZ dos nodes (single AZ). A rota padrão das subnets privadas nasce e morre
+  # com esta stack.
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - { Key: Name, Value: fcg-nat }
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !ImportValue fcg-network-public-subnet-a
+      Tags:
+        - { Key: Name, Value: fcg-nat }
+
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !ImportValue fcg-network-private-route-table
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # -------------------------------------------------------------- control plane
+  ClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: eks.amazonaws.com }
+            Action: [sts:AssumeRole, sts:TagSession]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEKSClusterPolicy'
+
+  Cluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: !Ref KubernetesVersion
+      RoleArn: !GetAtt ClusterRole.Arn
+      # Os add-ons de rede são gerenciados abaixo, com a nossa configuração.
+      BootstrapSelfManagedAddons: false
+      AccessConfig:
+        AuthenticationMode: API
+        # Quem roda o cluster-up vira admin do cluster (ver BootstrapCreatorAdmin).
+        BootstrapClusterCreatorAdminPermissions: !Equals [!Ref BootstrapCreatorAdmin, 'true']
+      ResourcesVpcConfig:
+        # As ENIs do control plane vão nas duas privadas: o EKS exige 2 AZs.
+        SubnetIds:
+          - !ImportValue fcg-network-private-subnet-a
+          - !ImportValue fcg-network-private-subnet-b
+        # Público porque os runners do GitHub (IPs dinâmicos) precisam do kubectl.
+        # Quem protege é a autenticação IAM (access entries), não a rede.
+        EndpointPublicAccess: true
+        EndpointPrivateAccess: true
+      Tags:
+        - { Key: project, Value: fcg }
+
+  # -------------------------------------------------------------- add-ons
+  # Prefix delegation: cada ENI recebe blocos /28 em vez de IPs avulsos. Sem isso um
+  # t3.medium comporta só 17 pods, pouco para Kong, filas, bancos, APIs e o próprio cluster.
+  VpcCniAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: vpc-cni
+      ResolveConflicts: OVERWRITE
+      ConfigurationValues: '{"env":{"ENABLE_PREFIX_DELEGATION":"true","WARM_PREFIX_TARGET":"1"}}'
+
+  KubeProxyAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: kube-proxy
+      ResolveConflicts: OVERWRITE
+
+  # CoreDNS e EBS CSI rodam como Deployment: sem node eles nunca ficam ACTIVE.
+  CoreDnsAddon:
+    Type: AWS::EKS::Addon
+    DependsOn: NodeGroup
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: coredns
+      ResolveConflicts: OVERWRITE
+
+  # Volumes EBS para os PVCs (Postgres). A StorageClass gp3 padrão vem de
+  # k8s/aws/storageclass.yaml, aplicada pelo cluster-up.
+  EbsCsiAddon:
+    Type: AWS::EKS::Addon
+    DependsOn: NodeGroup
+    Properties:
+      ClusterName: !Ref Cluster
+      AddonName: aws-ebs-csi-driver
+      ResolveConflicts: OVERWRITE
+
+  # -------------------------------------------------------------- nodes
+  NodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEKS_CNI_Policy'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly'
+        # O driver EBS usa a role do node. Mais simples que Pod Identity e suficiente aqui.
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy'
+
+  NodeGroup:
+    Type: AWS::EKS::Nodegroup
+    # Os nodes precisam de saída (NAT) para se registrar e baixar imagens, e da config
+    # do VPC CNI (prefix delegation) já aplicada quando sobem.
+    DependsOn: [PrivateDefaultRoute, VpcCniAddon, KubeProxyAddon]
+    Properties:
+      ClusterName: !Ref Cluster
+      NodegroupName: !Sub '${ClusterName}-nodes'
+      NodeRole: !GetAtt NodeRole.Arn
+      AmiType: AL2023_x86_64_STANDARD
+      CapacityType: !Ref NodeCapacityType
+      InstanceTypes: [!Ref NodeInstanceType]
+      DiskSize: 20
+      # Single AZ: só a privada da primeira AZ.
+      Subnets:
+        - !ImportValue fcg-network-private-subnet-a
+      ScalingConfig:
+        MinSize: 1
+        DesiredSize: !Ref NodeDesiredSize
+        MaxSize: !Ref NodeMaxSize
+      UpdateConfig:
+        MaxUnavailable: 1
+      Tags:
+        project: fcg
+
+  # -------------------------------------------------------------- acesso da pipeline
+  # As roles do CI podem editar só o namespace fcg (rollout das APIs), sem admin do cluster.
+  Fn::ForEach::CiAccess:
+    - Role
+    - !Ref CiRoleNames
+    - 'CiAccessEntry&{Role}':
+        Type: AWS::EKS::AccessEntry
+        Properties:
+          ClusterName: !Ref Cluster
+          PrincipalArn: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Role}'
+          AccessPolicies:
+            - PolicyArn: !Sub 'arn:${AWS::Partition}:eks::aws:cluster-access-policy/AmazonEKSEditPolicy'
+              AccessScope:
+                Type: namespace
+                Namespaces: [fcg]
+
+  # -------------------------------------------------------------- acesso do grupo
+  # Com um usuário IAM por integrante (team-access.yaml), o admin automático só cobriria
+  # quem criou o cluster; os outros ficariam sem kubectl. Cada fcg-<membro> vira admin.
+  Fn::ForEach::TeamAccess:
+    - Member
+    - !Ref TeamMembers
+    - 'TeamAccessEntry&{Member}':
+        Type: AWS::EKS::AccessEntry
+        Condition: TeamAccessEnabled
+        Properties:
+          ClusterName: !Ref Cluster
+          PrincipalArn: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:user/fcg-${Member}'
+          AccessPolicies:
+            - PolicyArn: !Sub 'arn:${AWS::Partition}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy'
+              AccessScope:
+                Type: cluster
+
+Outputs:
+  ClusterName:
+    Value: !Ref Cluster
+  KubeconfigCommand:
+    Description: Configura o kubectl local para o cluster.
+    Value: !Sub 'aws eks update-kubeconfig --name ${Cluster} --region ${AWS::Region}'
