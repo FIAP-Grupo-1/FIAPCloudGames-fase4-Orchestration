@@ -111,6 +111,9 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=fcgdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:-fcg123}"
+      # Cache de usuarios (chaves `user:*`/`users:*`, sem colisao com o catalogo).
+      # Sem esta variavel o app tenta localhost:6379.
+      ConnectionStrings__Redis: "redis:6379,user=${REDIS_USER:-fcg},password=${REDIS_PASS:-fcg123},abortConnect=false"
       JwtSettings__SecretKey: ${JWT_SECRET_KEY:-6a8a56f4d31a272d6e2f048f710c9cce45b51aa343fd6f73d8b69f1218eaac56}
       JwtSettings__ExpirationHours: "4"
       # Claim `iss` do token. O gateway (Kong) valida exatamente este valor -
@@ -138,6 +141,7 @@ services:
       - "8081:8080"
     depends_on:
       postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
 
   catalog-api:
     build:
