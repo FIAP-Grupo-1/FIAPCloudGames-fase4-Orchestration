@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  FCG - EKS Pod Identity: instala o agente no cluster e liga cada ServiceAccount
+  a sua IAM Role (criadas na stack fcg-workload-access). Efemera como o cluster: suba depois
+  da fcg-eks e apague ANTES dela (make pod-identity-down).
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: fcg
+  AppNamespace:
+    Type: String
+    Default: fcg
+  # Valores padrao do chart Helm do External Secrets Operator.
+  ExternalSecretsNamespace:
+    Type: String
+    Default: external-secrets
+  ExternalSecretsServiceAccount:
+    Type: String
+    Default: external-secrets
+
+Resources:
+  # O agente roda como DaemonSet e entrega as credenciais aos pods
+  # (AWS_CONTAINER_CREDENTIALS_FULL_URI); sem ele as associacoes nao tem efeito.
+  PodIdentityAgentAddon:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref ClusterName
+      AddonName: eks-pod-identity-agent
+      ResolveConflicts: OVERWRITE
+
+  ExternalSecretsAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    DependsOn: PodIdentityAgentAddon
+    Properties:
+      ClusterName: !Ref ClusterName
+      Namespace: !Ref ExternalSecretsNamespace
+      ServiceAccount: !Ref ExternalSecretsServiceAccount
+      RoleArn: !ImportValue fcg-eks-external-secrets-role-arn
+
+  # ServiceAccounts users-api/payments-api: k8s/20-users-api.yaml e k8s/22-payments-api.yaml.
+  UsersApiAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    DependsOn: PodIdentityAgentAddon
+    Properties:
+      ClusterName: !Ref ClusterName
+      Namespace: !Ref AppNamespace
+      ServiceAccount: users-api
+      RoleArn: !ImportValue fcg-eks-users-api-role-arn
+
+  PaymentsApiAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    DependsOn: PodIdentityAgentAddon
+    Properties:
+      ClusterName: !Ref ClusterName
+      Namespace: !Ref AppNamespace
+      ServiceAccount: payments-api
+      RoleArn: !ImportValue fcg-eks-payments-api-role-arn

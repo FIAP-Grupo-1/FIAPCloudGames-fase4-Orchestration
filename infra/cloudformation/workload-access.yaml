@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  FCG - segredos dos workloads no Secrets Manager e as IAM Roles que os pods do EKS
+  assumem via EKS Pod Identity. Nenhuma senha passa pelo repositorio: o Secrets Manager
+  gera os valores na criacao e o External Secrets Operator os entrega ao cluster.
+  Stack permanente (IAM e gratuito; cada segredo custa ~US$ 0,40/mes).
+
+Parameters:
+  NewRelicSecretName:
+    Type: String
+    Default: fcg/notifications/new-relic-license-key
+    Description: >
+      Segredo (texto puro) com a license key do New Relic, ja criado na fase 3 para a
+      Lambda do NotificationsAPI. Reaproveitado aqui para nao pagar um segredo a mais.
+
+# Topicos SNS do NotificationsAPI (stack fcg-notifications-serverless, fase 3).
+Mappings:
+  Sns:
+    Topics:
+      UserEvents: fcg-user-events
+      PaymentEvents: fcg-payment-events
+
+Resources:
+  # Senhas sem pontuacao: elas vao dentro de connection strings
+  # (`;`, `,`, `=`, `@` e `:` quebrariam o parse) e na ACL do Redis (`>senha`).
+  # O usuario nao e segredo; fica junto so para o ExternalSecret montar a
+  # connection string a partir de um lugar so.
+  PostgresSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: fcg/eks/postgres
+      Description: Usuario e senha do Postgres que roda no cluster (k8s/11-postgres.yaml).
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "fcg"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  RedisSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: fcg/eks/redis
+      Description: Usuario e senha da ACL do Redis (k8s/12-redis.yaml), usados pelo cache de users e catalog.
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "fcg"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  RabbitMqSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: fcg/eks/rabbitmq
+      Description: Usuario e senha do RabbitMQ (k8s/10-rabbitmq.yaml), usados por catalog e payments.
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "fcg"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  # Chave HMAC do JWT: emitida pelo users-api e validada pelo Kong e pelo catalog-api.
+  JwtSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: fcg/eks/jwt
+      Description: Chave de assinatura dos tokens JWT (users-api, catalog-api e Kong).
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: secretKey
+        PasswordLength: 64
+        ExcludePunctuation: true
+
+  # Quem le o Secrets Manager e o controller do External Secrets Operator; os pods
+  # das APIs continuam lendo um Secret comum do Kubernetes (fcg-secrets).
+  ExternalSecretsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: fcg-eks-external-secrets
+      Description: External Secrets Operator no EKS (Pod Identity) - leitura dos segredos fcg/eks/*
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: read-fcg-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource:
+                  # O ARN do segredo termina com um sufixo aleatorio de 6 caracteres.
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:fcg/eks/*'
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${NewRelicSecretName}-??????'
+
+  # Publicar no SNS sem access key: substitui AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+  # do fcg-secrets. O AWSSDK v4 das APIs ja entende as credenciais do Pod Identity.
+  UsersApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: fcg-eks-users-api
+      Description: users-api no EKS (Pod Identity) - publica UserRegisteredEvent no SNS
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: sns-publish
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Sub
+                  - 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${Topic}'
+                  - Topic: !FindInMap [Sns, Topics, UserEvents]
+
+  PaymentsApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: fcg-eks-payments-api
+      Description: payments-api no EKS (Pod Identity) - publica eventos de pagamento no SNS
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: sns-publish
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Sub
+                  - 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${Topic}'
+                  - Topic: !FindInMap [Sns, Topics, PaymentEvents]
+
+Outputs:
+  ExternalSecretsRoleArn:
+    Value: !GetAtt ExternalSecretsRole.Arn
+    Export:
+      Name: fcg-eks-external-secrets-role-arn
+  UsersApiRoleArn:
+    Value: !GetAtt UsersApiRole.Arn
+    Export:
+      Name: fcg-eks-users-api-role-arn
+  PaymentsApiRoleArn:
+    Value: !GetAtt PaymentsApiRole.Arn
+    Export:
+      Name: fcg-eks-payments-api-role-arn
