@@ -97,7 +97,9 @@ for f in 01-configmap 03-kong-config 05-service-accounts 10-rabbitmq 11-postgres
       -e "s#image: fcg/catalog-api:1.0#image: $registry/fcg/catalog-api:$catalog_tag#" \
       -e "s#image: fcg/payments-api:1.0#image: $registry/fcg/payments-api:$payments_tag#" \
       "k8s/$f.yaml"
-  echo "---"
+  # Quebra de linha antes do separador: um arquivo sem "\n" no fim (ex.: 24-kong.yaml)
+  # grudava o "---" na ultima linha e o apply recusava ("targetPort: 8100---").
+  printf '\n---\n'
 done | kubectl apply -f -
 
 echo "==> [4/4] Aguardando os rollouts"
