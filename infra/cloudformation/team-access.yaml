@@ -45,7 +45,8 @@ Resources:
                   Bool:
                     aws:MultiFactorAuthPresent: 'false'
 
-  Fn::ForEach::Members:
+  # O nome do loop não pode repetir o de um parâmetro (Members): o transform recusa.
+  Fn::ForEach::MemberUsers:
     - Member
     - !Ref Members
     - 'User${Member}':

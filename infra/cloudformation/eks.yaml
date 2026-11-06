@@ -59,6 +59,7 @@ Parameters:
 
 Conditions:
   TeamAccessEnabled: !Equals [!Ref TeamAccess, 'true']
+  BootstrapCreatorAdminEnabled: !Equals [!Ref BootstrapCreatorAdmin, 'true']
 
 Resources:
   # -------------------------------------------------------------- saída para a internet
@@ -110,7 +111,8 @@ Resources:
       AccessConfig:
         AuthenticationMode: API
         # Quem roda o cluster-up vira admin do cluster (ver BootstrapCreatorAdmin).
-        BootstrapClusterCreatorAdminPermissions: !Equals [!Ref BootstrapCreatorAdmin, 'true']
+        # Fn::Equals só vale dentro de Conditions; aqui o valor vem por !If.
+        BootstrapClusterCreatorAdminPermissions: !If [BootstrapCreatorAdminEnabled, true, false]
       ResourcesVpcConfig:
         # As ENIs do control plane vão nas duas privadas: o EKS exige 2 AZs.
         SubnetIds:
@@ -221,7 +223,8 @@ Resources:
   # -------------------------------------------------------------- acesso do grupo
   # Com um usuário IAM por integrante (team-access.yaml), o admin automático só cobriria
   # quem criou o cluster; os outros ficariam sem kubectl. Cada fcg-<membro> vira admin.
-  Fn::ForEach::TeamAccess:
+  # O nome do loop não pode repetir o de um parâmetro (TeamAccess): o transform recusa.
+  Fn::ForEach::TeamMemberAccessEntries:
     - Member
     - !Ref TeamMembers
     - 'TeamAccessEntry&{Member}':

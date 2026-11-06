@@ -32,8 +32,13 @@ account="$(aws sts get-caller-identity --query Account --output text)"
 caller="$(aws sts get-caller-identity --query Arn --output text)"
 echo "==> Conta AWS: $account (profile: ${AWS_PROFILE:-default}) | regiao: $REGION"
 
+# REVIEW_IN_PROGRESS = stack que nunca foi criada (o change set de criacao falhou):
+# para os parametros "so na criacao", conta como inexistente.
 stack_exists() {
-  aws cloudformation describe-stacks --stack-name "$1" --region "$REGION" >/dev/null 2>&1
+  local status
+  status="$(aws cloudformation describe-stacks --stack-name "$1" --region "$REGION" \
+    --query 'Stacks[0].StackStatus' --output text 2>/dev/null)" || return 1
+  [ "$status" != "REVIEW_IN_PROGRESS" ]
 }
 
 # Acesso do grupo ao cluster. Com usuarios individuais (stack fcg-team-access), cada
