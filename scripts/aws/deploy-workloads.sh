@@ -15,8 +15,9 @@
 # ESO), 13/23 (DynamoDB e Lambda emulados; na AWS sao os reais) e 30-ingress.yaml
 # (nginx do Minikube; no EKS a entrada e o NLB de k8s/aws/workloads/02-kong-public.yaml).
 #
-# Tag das imagens: a mais recente de cada repositorio ECR. Para fixar uma, exporte
-# USERS_API_TAG, CATALOG_API_TAG ou PAYMENTS_API_TAG (ex.: sha-1a2b3c4).
+# Tag das imagens: a maior release v* de cada repositorio ECR (git tag v1.0.0 no repo da
+# API dispara a pipeline); sem release, a sha-* mais recente. Para fixar uma, exporte
+# USERS_API_TAG, CATALOG_API_TAG ou PAYMENTS_API_TAG (ex.: v1.0.0 ou sha-1a2b3c4).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,9 +62,21 @@ kubectl wait --for=condition=Ready externalsecret/fcg-secrets externalsecret/new
   -n "$NAMESPACE" --timeout=120s
 
 echo "==> [3/4] Manifestos com imagens do ECR"
+# 1o a maior tag de release v* (nunca expira na lifecycle do ECR). Sem nenhuma, a
+# imagem com tag mais recente (sha-*, expira em 15 dias). O filtro imageDetails[?imageTags]
+# e necessario: cada push gera um index com tag e dois manifests filhos sem tag.
 latest_tag() {
-  aws ecr describe-images --repository-name "fcg/$1" --region "$REGION" \
-    --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' --output text
+  local tag
+  tag="$(aws ecr describe-images --repository-name "fcg/$1" --region "$REGION" \
+    --query "imageDetails[].imageTags[] | [?starts_with(@, 'v')]" --output text |
+    tr '\t' '\n' | sort -V | tail -n 1)"
+  if [[ -z "$tag" || "$tag" == "None" ]]; then
+    tag="$(aws ecr describe-images --repository-name "fcg/$1" --region "$REGION" \
+      --query 'sort_by(imageDetails[?imageTags], &imagePushedAt)[-1].imageTags[0]' --output text)"
+    [[ -n "$tag" && "$tag" != "None" ]] &&
+      echo "   aviso: fcg/$1 sem tag v*; usando $tag, que expira em 15 dias (crie uma tag git v*)." >&2
+  fi
+  printf '%s' "$tag"
 }
 users_tag="${USERS_API_TAG:-$(latest_tag users-api)}"
 catalog_tag="${CATALOG_API_TAG:-$(latest_tag catalog-api)}"
