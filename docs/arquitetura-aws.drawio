@@ -17,10 +17,10 @@
           <mxGeometry x="1670" y="400" width="140" height="70" as="geometry" />
         </mxCell>
         <mxCell id="aws" value="AWS Cloud" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;verticalAlign=top;align=left;spacingLeft=30;dashed=0;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;fontColor=#232F3E;dashed=0;" vertex="1" parent="1">
-          <mxGeometry x="200" y="70" width="1420" height="960" as="geometry" />
+          <mxGeometry x="200" y="70" width="1420" height="980" as="geometry" />
         </mxCell>
         <mxCell id="region" value="us-east-1" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;verticalAlign=top;align=left;spacingLeft=30;dashed=0;grIcon=mxgraph.aws4.group_region;strokeColor=#00A4A6;fillColor=none;fontColor=#147EBA;dashed=1;" vertex="1" parent="aws">
-          <mxGeometry x="20" y="40" width="1380" height="910" as="geometry" />
+          <mxGeometry x="20" y="40" width="1380" height="930" as="geometry" />
         </mxCell>
         <mxCell id="vpc" value="VPC fcg · 10.0.0.0/16" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;verticalAlign=top;align=left;spacingLeft=30;dashed=0;grIcon=mxgraph.aws4.group_vpc2;strokeColor=#8C4FFF;fillColor=none;fontColor=#8C4FFF;dashed=0;" vertex="1" parent="region">
           <mxGeometry x="20" y="50" width="920" height="720" as="geometry" />
@@ -43,7 +43,7 @@
         <mxCell id="priva" value="Subnet privada 10.0.32.0/19" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;verticalAlign=top;align=left;spacingLeft=30;dashed=0;grIcon=mxgraph.aws4.group_security_group;strokeColor=#00A4A6;fillColor=#E6F6F7;fontColor=#147EBA;dashed=0;grStroke=0;" vertex="1" parent="aza">
           <mxGeometry x="20" y="220" width="560" height="420" as="geometry" />
         </mxCell>
-        <mxCell id="ng" value="Managed node group ⏱ · 1–2× t3.medium · prefix delegation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#ED7100;dashed=1;verticalAlign=top;align=left;spacingLeft=60;fontSize=11;fontStyle=1;fontColor=#ED7100;container=1;collapsible=0;recursiveResize=0;" vertex="1" parent="priva">
+        <mxCell id="ng" value="Managed node group ⏱ · 1–2× c7i-flex.large · prefix delegation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#ED7100;dashed=1;verticalAlign=top;align=left;spacingLeft=60;fontSize=11;fontStyle=1;fontColor=#ED7100;container=1;collapsible=0;recursiveResize=0;" vertex="1" parent="priva">
           <mxGeometry x="20" y="40" width="520" height="360" as="geometry" />
         </mxCell>
         <mxCell id="ec2" value="" style="outlineConnect=0;fontColor=#232F3E;gradientColor=none;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.instance2;fillColor=#ED7100;" vertex="1" parent="ng">
@@ -73,7 +73,10 @@
         <mxCell id="postgres" value="PostgreSQL&lt;br&gt;(PVC · EBS)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;arcSize=12;fillColor=#326CE5;strokeColor=#1D4FB5;fontColor=#FFFFFF;fontStyle=1;" vertex="1" parent="ng">
           <mxGeometry x="410" y="180" width="100" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="ngnote" value="Pods recebem IP da própria subnet (VPC CNI).&lt;br&gt;Dados do Postgres somem quando o cluster é derrubado." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=11;fontColor=#545B64;" vertex="1" parent="ng">
+        <mxCell id="eso" value="External Secrets&lt;br&gt;(ns external-secrets)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;arcSize=12;fillColor=#326CE5;strokeColor=#1D4FB5;fontColor=#FFFFFF;fontStyle=1;" vertex="1" parent="ng">
+          <mxGeometry x="20" y="180" width="100" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="ngnote" value="Pods recebem IP da própria subnet (VPC CNI). Senhas vêm do Secrets Manager&lt;br&gt;via External Secrets; nenhuma no repositório. Dados do Postgres somem no cluster-down." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=11;fontColor=#545B64;" vertex="1" parent="ng">
           <mxGeometry x="20" y="280" width="480" height="40" as="geometry" />
         </mxCell>
         <mxCell id="azb" value="us-east-1b — só para a regra de 2 AZs" style="fillColor=none;strokeColor=#147EBA;dashed=1;verticalAlign=top;fontStyle=1;fontColor=#147EBA;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;fontSize=12;" vertex="1" parent="vpc">
@@ -100,6 +103,9 @@
         <mxCell id="ecr" value="&lt;b&gt;ECR&lt;/b&gt; · 3 repositórios fcg/*&lt;br&gt;tags imutáveis · scan on push" style="outlineConnect=0;fontColor=#232F3E;gradientColor=none;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.ecr;fillColor=#ED7100;" vertex="1" parent="region">
           <mxGeometry x="1010" y="90" width="56" height="56" as="geometry" />
         </mxCell>
+        <mxCell id="sm" value="&lt;b&gt;Secrets Manager&lt;/b&gt;&lt;br&gt;fcg/eks/* (gerados pela AWS)&lt;br&gt;lidos via Pod Identity" style="outlineConnect=0;fontColor=#232F3E;gradientColor=none;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.secrets_manager;fillColor=#DD344C;" vertex="1" parent="region">
+          <mxGeometry x="1230" y="90" width="56" height="56" as="geometry" />
+        </mxCell>
         <mxCell id="iam" value="&lt;b&gt;IAM OIDC&lt;/b&gt;&lt;br&gt;roles fcg-gha-&amp;lt;serviço&amp;gt;&lt;br&gt;(sem access key)" style="outlineConnect=0;fontColor=#232F3E;gradientColor=none;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;aspect=fixed;pointerEvents=1;shape=mxgraph.aws4.role;fillColor=#DD344C;" vertex="1" parent="region">
           <mxGeometry x="1010" y="250" width="56" height="32" as="geometry" />
         </mxCell>
@@ -118,8 +124,8 @@
         <mxCell id="ddb" value="DynamoDB&lt;br&gt;fcg-notifications" style="outlineConnect=0;fontColor=#232F3E;gradientColor=none;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fillColor=#C925D1;" vertex="1" parent="srv">
           <mxGeometry x="300" y="50" width="44" height="44" as="geometry" />
         </mxCell>
-        <mxCell id="stacks" value="&lt;b&gt;Stacks CloudFormation&lt;/b&gt;&lt;br&gt;&lt;b&gt;fcg-network&lt;/b&gt; · VPC, subnets, IGW, rotas, endpoint S3 — permanente, ~US$ 0&lt;br&gt;&lt;b&gt;fcg-eks&lt;/b&gt; ⏱ · NAT, EKS, node group, access entries — &lt;b&gt;efêmera&lt;/b&gt;: &lt;i&gt;make cluster-up&lt;/i&gt; / &lt;i&gt;make cluster-down&lt;/i&gt;&lt;br&gt;&lt;b&gt;fcg-ecr&lt;/b&gt; · repositórios + lifecycle · &lt;b&gt;fcg-github-oidc&lt;/b&gt; · provider + roles do CI · &lt;b&gt;fcg-notifications-serverless&lt;/b&gt; · SAM" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;arcSize=12;fillColor=#FFFFFF;strokeColor=#E7157B;align=left;spacingLeft=10;verticalAlign=top;spacingTop=6;fontColor=#232F3E;" vertex="1" parent="region">
-          <mxGeometry x="20" y="790" width="920" height="100" as="geometry" />
+        <mxCell id="stacks" value="&lt;b&gt;Stacks CloudFormation&lt;/b&gt;&lt;br&gt;&lt;b&gt;fcg-network&lt;/b&gt; · VPC, subnets, IGW, rotas, endpoint S3 — permanente, ~US$ 0&lt;br&gt;&lt;b&gt;fcg-eks&lt;/b&gt; ⏱ · NAT, EKS, node group, access entries — &lt;b&gt;efêmera&lt;/b&gt;: &lt;i&gt;make cluster-up&lt;/i&gt; / &lt;i&gt;make cluster-down&lt;/i&gt;&lt;br&gt;&lt;b&gt;fcg-pod-identity&lt;/b&gt; ⏱ · agente + ServiceAccounts → roles (sobe e desce com o cluster)&lt;br&gt;&lt;b&gt;fcg-workload-access&lt;/b&gt; · segredos fcg/eks/* + roles dos pods · &lt;b&gt;fcg-ecr&lt;/b&gt; · repositórios + lifecycle&lt;br&gt;&lt;b&gt;fcg-github-oidc&lt;/b&gt; · provider + roles do CI · &lt;b&gt;fcg-budget&lt;/b&gt; · alerta US$ 5/mês · &lt;b&gt;fcg-notifications-serverless&lt;/b&gt; · SAM" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;arcSize=12;fillColor=#FFFFFF;strokeColor=#E7157B;align=left;spacingLeft=10;verticalAlign=top;spacingTop=6;fontColor=#232F3E;" vertex="1" parent="region">
+          <mxGeometry x="20" y="790" width="920" height="120" as="geometry" />
         </mxCell>
         <mxCell id="legend" value="&lt;b&gt;⏱&lt;/b&gt; = existe só com o cluster ligado&lt;br&gt;(cobrado por hora; derrubado entre gravações)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;arcSize=12;fillColor=#FFF4E5;strokeColor=#ED7100;fontColor=#232F3E;align=left;spacingLeft=10;" vertex="1" parent="region">
           <mxGeometry x="970" y="790" width="390" height="60" as="geometry" />
@@ -154,7 +160,7 @@
         <mxCell id="e14" value="kubectl (deploy)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#545B64;fontSize=11;fontColor=#232F3E;labelBackgroundColor=#FFFFFF;dashed=1;exitX=0;exitY=0.75;entryX=1;entryY=0.5;" edge="1" parent="1" source="gha" target="eks">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e15" value="eventos (users/payments)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#545B64;fontSize=11;fontColor=#232F3E;labelBackgroundColor=#FFFFFF;dashed=1;exitX=1;exitY=0.62;entryX=0;entryY=0.5;" edge="1" parent="1" source="ng" target="sns">
+        <mxCell id="e15" value="eventos · Pod Identity" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#545B64;fontSize=11;fontColor=#232F3E;labelBackgroundColor=#FFFFFF;dashed=1;exitX=1;exitY=0.62;entryX=0;entryY=0.5;" edge="1" parent="1" source="ng" target="sns">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#545B64;fontSize=11;fontColor=#232F3E;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="sns" target="sqs">

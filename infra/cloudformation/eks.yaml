@@ -15,9 +15,14 @@ Parameters:
     Type: String
     Default: '1.37'
     Description: Versão em suporte padrão (aws eks describe-cluster-versions).
+  # A conta está no plano Free da AWS: o EC2 só aceita tipos elegíveis ao Free Tier
+  # (aws ec2 describe-instance-types --filters Name=free-tier-eligible,Values=true).
+  # Com t3.medium, toda tentativa de subir node falhava e o node group ficava em CREATING.
+  # c7i-flex.large tem a mesma capacidade (2 vCPU, 4 GiB); m7i-flex.large tem 8 GiB.
   NodeInstanceType:
     Type: String
-    Default: t3.medium
+    Default: c7i-flex.large
+    AllowedValues: [c7i-flex.large, m7i-flex.large]
   NodeDesiredSize:
     Type: Number
     Default: 2
@@ -127,7 +132,8 @@ Resources:
 
   # -------------------------------------------------------------- add-ons
   # Prefix delegation: cada ENI recebe blocos /28 em vez de IPs avulsos. Sem isso um
-  # t3.medium comporta só 17 pods, pouco para Kong, filas, bancos, APIs e o próprio cluster.
+  # c7i-flex.large comporta só 29 pods, pouco para Kong, filas, bancos, APIs, External
+  # Secrets e o próprio cluster.
   VpcCniAddon:
     Type: AWS::EKS::Addon
     Properties:
