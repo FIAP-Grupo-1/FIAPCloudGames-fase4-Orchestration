@@ -68,7 +68,7 @@ spec:
             - name: NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED
               value: "true"
           # Catálogo não expõe /health: sonda TCP na porta 8080.
-          # Requests dimensionados para caber em 2 nodes t3.medium (EKS) com folga para o
+          # Requests dimensionados para caber em 2 nodes c7i-flex.large (EKS, 4 GiB cada) com folga para o
           # maxSurge; sem limite de CPU para nao estrangular o startup do .NET.
           resources:
             requests: { cpu: 100m, memory: 256Mi }

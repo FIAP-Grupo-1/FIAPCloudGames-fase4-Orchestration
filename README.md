@@ -678,10 +678,16 @@ não é requisito do TC, então redundância entre AZs só custaria dinheiro.
 | Stack | O que tem | Quando existe |
 |---|---|---|
 | `fcg-network` (`vpc.yaml`) | VPC `10.0.0.0/16`, 2 subnets públicas `/20`, 2 privadas `/19`, Internet Gateway, endpoint S3 (gateway, gratuito) | sempre (~US$ 0) |
-| `fcg-eks` (`eks.yaml`) | NAT Gateway, cluster EKS, node group (1–2× `t3.medium`), add-ons, acesso do CI | **só quando ligado**: cobrado por hora |
+| `fcg-eks` (`eks.yaml`) | NAT Gateway, cluster EKS, node group (1–2× `c7i-flex.large`), add-ons, acesso do CI | **só quando ligado**: cobrado por hora |
+
+**Tipo dos nodes:** a conta está no plano Free da AWS, que só deixa criar instâncias elegíveis ao Free
+Tier (`aws ec2 describe-instance-types --filters Name=free-tier-eligible,Values=true`). Por isso os nodes
+são `c7i-flex.large` (2 vCPU, 4 GiB), não `t3.medium`. Para mais memória: `m7i-flex.large` (8 GiB), pelo
+parâmetro `NodeInstanceType`.
 
 O cluster é **efêmero**: o EKS cobra por hora (US$ 0,10/h só o control plane), não por mês. Ligado o
-mês inteiro custaria ~US$ 160; com ~20 h de uso, uns US$ 5.
+mês inteiro custaria ~US$ 230 (~US$ 0,32/h: control plane US$ 0,10 + NAT US$ 0,045 + 2 nodes a US$ 0,085);
+com ~20 h de uso, uns US$ 6.
 
 ```bash
 export AWS_PROFILE=fcg     # conta do grupo (ver aviso acima)
@@ -697,7 +703,7 @@ make cluster-down          # derruba o cluster (10-15 min); a rede fica
 - **Pod Identity:** se a stack `fcg-workload-access` (segredos e roles dos pods) existir, o `cluster-up` já
   sobe a `fcg-pod-identity`, e o `cluster-down` a remove antes do cluster. Depois do `cluster-up`, os
   workloads sobem com `make workloads-deploy` (ver `docs/eks-workloads-e-segredos.md`).
-- **Prefix delegation** no VPC CNI: sem ela um `t3.medium` aceita só 17 pods. O `cluster-up` mostra a
+- **Prefix delegation** no VPC CNI: sem ela um `c7i-flex.large` aceita só 29 pods. O `cluster-up` mostra a
   capacidade de pods de cada node no final.
 - **`cluster-down` apaga o namespace `fcg` antes da stack.** O NLB do Kong e os volumes EBS são criados
   pelo Kubernetes, não pelo CloudFormation, e sobrariam cobrando. Os **dados do Postgres somem** a cada
