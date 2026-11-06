@@ -78,7 +78,8 @@ summary() {
     echo "    Houve falhas: veja as linhas marcadas com ERRO acima."
   fi
 }
-trap 'summary; exit $(( errors > 0 ? 1 : 0 ))' INT
+# TERM: o e2e.sh encerra este script assim (processo em background ignora SIGINT).
+trap 'summary; exit $(( errors > 0 ? 1 : 0 ))' INT TERM
 
 echo "==> Testando $url por ${DURATION}s (1 requisicao a cada ${INTERVAL}s). Ctrl+C encerra."
 while ((SECONDS - start < DURATION)); do

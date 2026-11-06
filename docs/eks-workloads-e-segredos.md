@@ -70,8 +70,25 @@ O `cluster-up` sobe a stack `fcg-pod-identity` sozinho quando a `fcg-workload-ac
 `cluster-down` a remove antes da `fcg-eks`. `make pod-identity-deploy` / `pod-identity-down` continuam
 disponíveis para rodar separadamente.
 
-`make workloads-deploy` (`scripts/aws/deploy-workloads.sh`) só roda no contexto `fcg-eks`, usa a tag mais recente
-de cada repositório ECR (ou `USERS_API_TAG`/`CATALOG_API_TAG`/`PAYMENTS_API_TAG`) e termina mostrando o DNS do NLB.
+`make workloads-deploy` (`scripts/aws/deploy-workloads.sh`) só roda no contexto `fcg-eks`, usa a maior tag de
+release `v*` de cada repositório ECR (sem release, a `sha-*` mais recente, que expira em 15 dias; ou
+`USERS_API_TAG`/`CATALOG_API_TAG`/`PAYMENTS_API_TAG`) e termina mostrando o DNS do NLB.
+
+### Teste fim a fim: `make e2e`
+
+`scripts/aws/e2e.sh` roda o ciclo inteiro do zero e **sempre derruba o cluster no fim**, inclusive em erro ou
+Ctrl+C (`trap`):
+
+1. pré-checagem sem custo: ferramentas, conta `450753703903`, stacks permanentes, imagens no ECR, e a recusa
+   se a `fcg-eks` já existir (pode ser a sessão de um colega);
+2. `cluster-up` → `workloads-deploy`;
+3. testes pelo NLB: `/payments/health`, cadastro de um usuário descartável (e-mail e senha aleatórios), login,
+   `/catalog/api/v1/games` com JWT e a notificação do cadastro no DynamoDB (`GSI1-UserId`);
+4. `zero-downtime-check` em paralelo com `kubectl rollout restart` (`ZD_DEPLOYMENTS`, padrão `catalog-api`);
+5. resumo OK/FALHA e `cluster-down`.
+
+Leva de 45 a 60 min (~US$ 0,25). `make e2e KEEP_CLUSTER=1` mantém o cluster no ar para gravar o vídeo (depois:
+`make cluster-down`). O log completo fica em `logs/e2e-<data>.log` (ignorado pelo git).
 Depende de `aws`, `kubectl` e `helm`.
 
 **Zero downtime:** APIs e Kong usam `RollingUpdate` com `maxUnavailable: 0` e `maxSurge: 1`. Um pod novo só

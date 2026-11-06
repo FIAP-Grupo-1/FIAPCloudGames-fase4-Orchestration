@@ -17,7 +17,7 @@ OIDC_STACK ?= fcg-github-oidc
 SECRETS_STACK ?= fcg-workload-access
 POD_IDENTITY_STACK ?= fcg-pod-identity
 
-.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs cluster-up cluster-down cluster-status secrets-deploy pod-identity-deploy pod-identity-down workloads-deploy zero-downtime-check team-access-deploy
+.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs cluster-up cluster-down cluster-status secrets-deploy pod-identity-deploy pod-identity-down workloads-deploy zero-downtime-check e2e team-access-deploy
 
 help:
 	@echo "Comandos disponiveis:"
@@ -37,6 +37,7 @@ help:
 	@echo "  make pod-identity-down   - remove a Pod Identity (o cluster-down ja roda)"
 	@echo "  make workloads-deploy    - sobe ESO, segredos e as APIs no EKS com imagens do ECR"
 	@echo "  make zero-downtime-check - curl em loop no NLB durante um rollout (ZD_EMAIL/ZD_PASSWORD p/ rota com JWT)"
+	@echo "  make e2e                - teste fim a fim limpo: cluster-up, deploy, testes, zero downtime e cluster-down (KEEP_CLUSTER=1 mantem)"
 	@echo "  make team-access-deploy  - um usuario IAM por integrante, console so com MFA (stack fcg-team-access)"
 	@echo "  make budget-deploy BUDGET_EMAIL=... - alerta de custo mensal da conta (padrao US\$$ 5)"
 	@echo "  make oidc-deploy  - cria/atualiza o OIDC do GitHub e as roles de push no ECR (stack $(OIDC_STACK))"
@@ -109,6 +110,10 @@ workloads-deploy:
 # Prova de zero downtime para o video (ver docs/eks-workloads-e-segredos.md).
 zero-downtime-check:
 	@$(BASH) scripts/aws/zero-downtime-check.sh
+
+# Teste fim a fim limpo (sobe, testa e SEMPRE derruba; ver o cabecalho do script).
+e2e:
+	@$(BASH) scripts/aws/e2e.sh
 
 # Substitui o usuario compartilhado fcg-fiap-aws. Senha inicial e access key ficam
 # fora do template (ver comentario em team-access.yaml).
