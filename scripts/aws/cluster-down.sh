@@ -11,7 +11,7 @@
 # do Service espera o LB sumir, e o PVC leva o volume junto (reclaimPolicy Delete).
 # Os dados do Postgres somem com ele.
 #
-# A stack fcg-pod-identity (agente e associacoes) importa o cluster e precisa sair
+# A stack fcg-pod-identity (associacoes) importa o cluster e precisa sair
 # antes da fcg-eks; senao fica orfa e o proximo pod-identity-deploy falha.
 set -euo pipefail
 

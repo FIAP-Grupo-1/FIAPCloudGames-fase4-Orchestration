@@ -158,15 +158,44 @@ Resources:
       AddonName: coredns
       ResolveConflicts: OVERWRITE
 
-  # Volumes EBS para os PVCs (Postgres). A StorageClass gp3 padrão vem de
-  # k8s/aws/storageclass.yaml, aplicada pelo cluster-up.
-  EbsCsiAddon:
+  # Agente do Pod Identity (DaemonSet): entrega as credenciais das roles aos pods.
+  # Fica aqui, e não na fcg-pod-identity, porque o EBS CSI abaixo depende dele para
+  # o add-on ficar ACTIVE. Como DaemonSet, também precisa de node para ficar ACTIVE.
+  PodIdentityAgentAddon:
     Type: AWS::EKS::Addon
     DependsOn: NodeGroup
     Properties:
       ClusterName: !Ref Cluster
+      AddonName: eks-pod-identity-agent
+      ResolveConflicts: OVERWRITE
+
+  # Volumes EBS para os PVCs (Postgres). A StorageClass gp3 padrão vem de
+  # k8s/aws/storageclass.yaml, aplicada pelo cluster-up.
+  # Credencial via Pod Identity, não pela role do node: os nodes AL2023 têm IMDS com
+  # hop limit 1, então pods não alcançam a role da máquina (o controller entrava em
+  # CrashLoopBackOff com "no EC2 IMDS role found" e o add-on nunca ficava ACTIVE).
+  EbsCsiAddon:
+    Type: AWS::EKS::Addon
+    DependsOn: [NodeGroup, PodIdentityAgentAddon]
+    Properties:
+      ClusterName: !Ref Cluster
       AddonName: aws-ebs-csi-driver
       ResolveConflicts: OVERWRITE
+      PodIdentityAssociations:
+        - ServiceAccount: ebs-csi-controller-sa
+          RoleArn: !GetAtt EbsCsiRole.Arn
+
+  EbsCsiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: pods.eks.amazonaws.com }
+            Action: [sts:AssumeRole, sts:TagSession]
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy'
 
   # -------------------------------------------------------------- nodes
   NodeRole:
@@ -182,8 +211,7 @@ Resources:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy'
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEKS_CNI_Policy'
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly'
-        # O driver EBS usa a role do node. Mais simples que Pod Identity e suficiente aqui.
-        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy'
+        # A permissão de volumes EBS fica só na EbsCsiRole (Pod Identity), não no node.
 
   NodeGroup:
     Type: AWS::EKS::Nodegroup
