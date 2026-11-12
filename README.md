@@ -649,7 +649,7 @@ troca o token OIDC do GitHub por credenciais temporárias de uma IAM Role (váli
 | Recurso | O que faz |
 |---|---|
 | Identity Provider `token.actions.githubusercontent.com` | um por conta; `CreateOidcProvider=false` se já existir |
-| Role `fcg-gha-<serviço>` (uma por repo) | só faz push no `fcg/<serviço>` do próprio repo |
+| Role `fcg-gha-<serviço>` (uma por repo) | só faz push no `fcg/<serviço>` do próprio repo e lê o endereço do cluster `fcg` (`eks:DescribeCluster`) para o deploy; dentro do cluster, edita só o namespace `fcg` (access entry do `eks.yaml`) |
 
 A proteção está na **trust policy**: a role só é assumida pelo repositório exato e só a partir da `main` ou
 de tags `v*`. Workflows de pull request (inclusive de forks) não conseguem assumir a role, então ninguém de
