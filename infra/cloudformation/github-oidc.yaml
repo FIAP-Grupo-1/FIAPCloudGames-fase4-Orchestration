@@ -3,7 +3,9 @@ Transform: AWS::LanguageExtensions
 Description: >
   FCG - acesso do GitHub Actions à AWS via OIDC, sem access key guardada no GitHub.
   Cria o Identity Provider do GitHub e uma IAM Role por repositório de serviço,
-  que só pode publicar imagens no repositório ECR do próprio serviço.
+  que só pode publicar imagens no repositório ECR do próprio serviço e ler o
+  endereço do cluster EKS para o deploy (o que pode fazer dentro dele é a access
+  entry do eks.yaml).
 
 Parameters:
   ServiceRepos:
@@ -47,6 +49,12 @@ Mappings:
       Name: fcg/payments-api
       RoleName: fcg-gha-payments-api
       RepoId: '1427737598'
+
+  # Nome do cluster EKS (ClusterName do eks.yaml / CLUSTER_NAME do cluster-up.sh).
+  # O contexto do kubectl se chama fcg-eks, mas o cluster na AWS é "fcg".
+  Eks:
+    Cluster:
+      Name: fcg
 
 Resources:
   GitHubOidcProvider:
@@ -119,6 +127,18 @@ Resources:
                     Resource: !Sub
                       - 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepo}'
                       - EcrRepo: !FindInMap [EcrRepository, !Ref Repo, Name]
+            # Deploy pela pipeline: o `aws eks update-kubeconfig` lê endpoint e CA do
+            # cluster. Só leitura e só deste cluster; dentro do Kubernetes a role
+            # edita apenas o namespace fcg (CiAccessEntry no eks.yaml).
+            - PolicyName: eks-deploy
+              PolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                  - Effect: Allow
+                    Action: eks:DescribeCluster
+                    Resource: !Sub
+                      - 'arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}'
+                      - ClusterName: !FindInMap [Eks, Cluster, Name]
 
 Outputs:
   Fn::ForEach::RoleArns:
