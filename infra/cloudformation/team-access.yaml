@@ -40,10 +40,18 @@ Resources:
                   - iam:ChangePassword
                   - iam:GetAccountPasswordPolicy
                   - sts:GetSessionToken
-                Resource: '*'
+                # Os transforms do CloudFormation (LanguageExtensions do eks.yaml, Serverless
+                # do SAM) sao autorizados pelo proprio CloudFormation em nome de quem chamou,
+                # e essa checagem chega com aws:MultiFactorAuthPresent=false mesmo vindo da
+                # CLI: sem esta excecao o `make cluster-up` falha com "explicit deny" no
+                # transform/LanguageExtensions.
+                NotResource: !Sub 'arn:aws:cloudformation:${AWS::Region}:aws:transform/*'
                 Condition:
                   Bool:
                     aws:MultiFactorAuthPresent: 'false'
+                    # Chamadas que um servico da AWS faz em nome do usuario (CloudFormation
+                    # criando o EKS, por exemplo) ja foram autorizadas na chamada original.
+                    aws:ViaAWSService: 'false'
 
   # O nome do loop não pode repetir o de um parâmetro (Members): o transform recusa.
   Fn::ForEach::MemberUsers:
