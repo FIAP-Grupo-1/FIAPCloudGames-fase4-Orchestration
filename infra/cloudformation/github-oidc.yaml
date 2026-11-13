@@ -50,6 +50,13 @@ Mappings:
       RoleName: fcg-gha-payments-api
       RepoId: '1427737598'
 
+  # NotificationsAPI nao tem imagem: e uma Lambda publicada pelo SAM (sam deploy).
+  Notifications:
+    Repo:
+      Name: FIAPCloudGames-fase4-NotificationsAPI
+      Id: '1427732422'
+      Stack: fcg-notifications-serverless
+
   # Nome do cluster EKS (ClusterName do eks.yaml / CLUSTER_NAME do cluster-up.sh).
   # O contexto do kubectl se chama fcg-eks, mas o cluster na AWS é "fcg".
   Eks:
@@ -140,7 +147,162 @@ Resources:
                       - 'arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}'
                       - ClusterName: !FindInMap [Eks, Cluster, Name]
 
+  # ---------- NotificationsAPI (Lambda): deploy pela pipeline com `sam deploy` ----------
+  # Duas roles, para a do GitHub nao precisar de poder sobre IAM/Lambda/SQS:
+  #   - fcg-gha-notifications: o que o GitHub Actions assume. So envia o pacote para o
+  #     bucket do SAM e pede ao CloudFormation o change set da stack da Lambda.
+  #   - fcg-cfn-notifications: role de servico que o CloudFormation usa para aplicar o
+  #     change set, limitada aos recursos fcg-notifications* da stack.
+  NotificationsCfnRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: fcg-cfn-notifications
+      Description: CloudFormation aplica a stack fcg-notifications-serverless (deploy da pipeline)
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: notifications-stack
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:*
+                Resource:
+                  - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:fcg-notifications-*'
+              # Event source mapping (SQS -> Lambda) nao aceita filtro por nome da funcao.
+              - Effect: Allow
+                Action:
+                  - lambda:CreateEventSourceMapping
+                  - lambda:GetEventSourceMapping
+                  - lambda:UpdateEventSourceMapping
+                  - lambda:DeleteEventSourceMapping
+                  - lambda:ListEventSourceMappings
+                Resource: '*'
+              # Roles das funcoes, geradas pelo SAM com o prefixo do nome da stack.
+              - Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:GetRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/fcg-notifications-serverl*'
+              - Effect: Allow
+                Action: sqs:*
+                Resource: !Sub 'arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:fcg-notifications-*'
+              - Effect: Allow
+                Action: sns:*
+                Resource:
+                  - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:fcg-user-events*'
+                  - !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:fcg-payment-events*'
+              - Effect: Allow
+                Action: dynamodb:*
+                Resource:
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/fcg-notifications'
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/fcg-notifications/*'
+              # {{resolve:secretsmanager:...}} da license key do New Relic no template.
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:fcg/notifications/*'
+              # O SAM le o pacote da funcao no bucket gerenciado dele.
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: 'arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*/*'
+
+  NotificationsDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: fcg-gha-notifications
+      Description: GitHub Actions de FIAPCloudGames-fase4-NotificationsAPI - sam deploy da Lambda
+      MaxSessionDuration: 3600
+      # So a main do repositorio exato (subject imutavel, mesmo formato das roles acima).
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub
+                  - 'repo:${Owner}@${OwnerId}/${RepoName}@${RepoId}:ref:refs/heads/main'
+                  - Owner: !FindInMap [GitHub, Owner, Name]
+                    OwnerId: !FindInMap [GitHub, Owner, Id]
+                    RepoName: !FindInMap [Notifications, Repo, Name]
+                    RepoId: !FindInMap [Notifications, Repo, Id]
+      Policies:
+        - PolicyName: sam-deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:ListChangeSets
+                Resource:
+                  - !Sub
+                    - 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${Stack}/*'
+                    - Stack: !FindInMap [Notifications, Repo, Stack]
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/aws-sam-cli-managed-default/*'
+              # O template usa o transform do SAM (AWS::Serverless-2016-10-31).
+              - Effect: Allow
+                Action: cloudformation:CreateChangeSet
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31'
+              - Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - 'arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*'
+                  - 'arn:aws:s3:::aws-sam-cli-managed-default-samclisourcebucket-*/*'
+              # Resumo do deploy: versao para a qual o alias prod aponta.
+              - Effect: Allow
+                Action: lambda:GetAlias
+                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:fcg-notifications-*'
+              # Entrega a role de servico ao CloudFormation (sam deploy --role-arn).
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt NotificationsCfnRole.Arn
+
 Outputs:
+  NotificationsDeployRoleArn:
+    Description: Valor da variavel AWS_ROLE_ARN no repositorio FIAPCloudGames-fase4-NotificationsAPI
+    Value: !GetAtt NotificationsDeployRole.Arn
+  NotificationsCfnRoleArn:
+    Description: Valor da variavel CFN_ROLE_ARN no repositorio FIAPCloudGames-fase4-NotificationsAPI
+    Value: !GetAtt NotificationsCfnRole.Arn
   Fn::ForEach::RoleArns:
     - Repo
     - !Ref ServiceRepos
