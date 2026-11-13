@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
-# Sobrescreve, no cluster, os segredos que os manifestos versionados so trazem
-# como PLACEHOLDER -- lendo os valores reais do .env (que nunca vai para o git).
+# Monta, no Minikube, os Secrets fcg-secrets e new-relic a partir do .env (que
+# nunca vai para o git). Nenhuma senha fica versionada: o antigo k8s/02-secret.yaml
+# (com valores de exemplo) saiu do repositorio.
 #
-# Por que este script existe
-# --------------------------
-# k8s/02-secret.yaml e k8s/04-new-relic-secret.yaml sao versionados, entao nao
-# podem conter a license key do New Relic nem as credenciais da AWS. Eles trazem
-# "COLOQUE_SUA_CHAVE_AQUI"/"SUBSTITUA_AQUI", e um `kubectl apply -f k8s/` sobe o
-# cluster com esses valores de mentira. O sintoma nao e um erro claro:
-#   - license key invalida  -> o agente New Relic sobe e NAO reporta nada;
-#   - credencial AWS falsa  -> o publish no SNS falha e o evento e PERDIDO,
-#                              depois de ~16s travado na cadeia de credenciais.
+# No EKS os MESMOS Secrets (mesmos nomes e chaves) vem do AWS Secrets Manager via
+# External Secrets (k8s/aws/workloads/01-external-secrets.yaml); os Deployments
+# nao mudam entre um ambiente e outro.
 #
 # Mesma ideia do sync-configmap.sh: uma fonte de verdade so (.env, o mesmo que o
 # Compose usa) em vez de duas copias que desencontram.
 #
-# E idempotente e roda DEPOIS do `kubectl apply -f k8s/`, para sobrepor o
-# placeholder. Se uma variavel nao estiver no .env, avisa e segue -- o cluster
-# sobe igual, so sem aquela integracao.
+# E idempotente e roda ANTES do `kubectl apply -f k8s/`, para os pods ja nascerem
+# com o Secret pronto (ver deploy.sh).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,8 +32,53 @@ else
   exit 1
 fi
 
+# Obrigatorias: sem elas os bancos e o login nao funcionam.
+missing=()
+for v in POSTGRES_PASSWORD REDIS_PASS RABBITMQ_PASS JWT_SECRET_KEY; do
+  [ -n "${!v:-}" ] || missing+=("$v")
+done
+if [ "${#missing[@]}" -gt 0 ]; then
+  echo "!! Variaveis obrigatorias vazias no .env: ${missing[*]}" >&2
+  exit 1
+fi
+
+PG_USER="${POSTGRES_USER:-fcg}"
+REDIS_USER="${REDIS_USER:-fcg}"
+kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl apply -f k8s/00-namespace.yaml >/dev/null
+
+# ---------- fcg-secrets ----------
+# Mesmas chaves que o ExternalSecret do EKS monta.
+args=(
+  --from-literal=RabbitMq__Password="$RABBITMQ_PASS"
+  --from-literal=JwtSettings__SecretKey="$JWT_SECRET_KEY"
+  --from-literal=Users__ConnectionString="Host=postgres;Port=5432;Database=fcgdb;Username=$PG_USER;Password=$POSTGRES_PASSWORD"
+  --from-literal=Catalog__ConnectionString="Host=postgres;Database=catalogdb;Username=$PG_USER;Password=$POSTGRES_PASSWORD"
+  --from-literal=Payments__ConnectionString="Host=postgres;Database=paymentsdb;Username=$PG_USER;Password=$POSTGRES_PASSWORD"
+  # `abortConnect=false` deixa o app subir mesmo com o Redis ainda fora do ar.
+  --from-literal=Catalog__RedisConnection="redis:6379,user=$REDIS_USER,password=$REDIS_PASS,abortConnect=false"
+  --from-literal=Users__RedisConnection="redis:6379,user=$REDIS_USER,password=$REDIS_PASS,abortConnect=false"
+  --from-literal=Postgres__Password="$POSTGRES_PASSWORD"
+  --from-literal=Redis__Password="$REDIS_PASS"
+)
+if [ -n "${ADMIN_PASSWORD:-}" ]; then
+  args+=(--from-literal=Seed__AdminPassword="$ADMIN_PASSWORD")
+else
+  echo "!! ADMIN_PASSWORD vazia no .env -- o users-api sobe sem criar o admin raiz." >&2
+fi
+# Credenciais AWS: so no Minikube (no EKS o SNS usa Pod Identity, sem chave).
+if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+  args+=(--from-literal=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
+         --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY")
+else
+  echo "!! AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY vazias no .env." >&2
+  echo "   users-api e payments-api vao subir, mas o publish no SNS falha e o" >&2
+  echo "   evento e perdido -- a Lambda na AWS nao sera acionada." >&2
+fi
+kubectl create secret generic fcg-secrets -n "$NAMESPACE" "${args[@]}" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+echo "==> Secret fcg-secrets montado a partir do .env"
+
 # ---------- New Relic ----------
-# O Secret inteiro tem uma chave so, entao da para recria-lo por completo.
 if [ -n "${NEW_RELIC_LICENSE_KEY:-}" ]; then
   kubectl create secret generic new-relic -n "$NAMESPACE" \
     --from-literal=license-key="$NEW_RELIC_LICENSE_KEY" \
@@ -49,35 +88,14 @@ else
   echo "!! NEW_RELIC_LICENSE_KEY vazia no .env -- os agentes vao subir sem reportar." >&2
 fi
 
-# ---------- AWS ----------
-# Aqui NAO da para recriar o Secret: fcg-secrets guarda tambem as connection
-# strings e o segredo do JWT, que continuam vindo do manifesto. Entao so
-# aplicamos um patch nas duas chaves da AWS (`|| true` nao serve: queremos saber
-# se o patch falhou).
-if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
-  AK_B64="$(printf '%s' "$AWS_ACCESS_KEY_ID"     | base64 | tr -d '\n')"
-  SK_B64="$(printf '%s' "$AWS_SECRET_ACCESS_KEY" | base64 | tr -d '\n')"
-  kubectl patch secret fcg-secrets -n "$NAMESPACE" --type=merge -p \
-    "{\"data\":{\"AWS_ACCESS_KEY_ID\":\"${AK_B64}\",\"AWS_SECRET_ACCESS_KEY\":\"${SK_B64}\"}}" >/dev/null
-  echo "==> Credenciais AWS aplicadas em fcg-secrets a partir do .env"
-else
-  echo "!! AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY vazias no .env." >&2
-  echo "   users-api e payments-api vao subir, mas o publish no SNS falha e o" >&2
-  echo "   evento e perdido -- a Lambda na AWS nao sera acionada." >&2
-fi
-
 # Os pods leem Secret por variavel de ambiente, e isso e resolvido UMA VEZ, na
 # criacao do container: trocar o Secret NAO afeta quem ja esta rodando.
 #
-# Mesmo truque do ConfigMap do Kong (ver sync-configmap.sh): em vez de um
-# `rollout restart` cego a cada deploy, gravamos o hash dos valores numa
-# annotation do pod template. O `kubectl patch` e idempotente, entao o Deployment
-# so rola quando o segredo realmente mudou -- e um `make k8s-deploy` repetido nao
-# derruba os pods a toa.
-#
-# So o hash vai para a annotation, nunca o valor.
-SECRETS_HASH="$(printf '%s|%s|%s' \
-  "${NEW_RELIC_LICENSE_KEY:-}" "${AWS_ACCESS_KEY_ID:-}" "${AWS_SECRET_ACCESS_KEY:-}" \
+# Mesmo truque do ConfigMap do Kong (ver sync-configmap.sh): gravamos o hash dos
+# valores numa annotation do pod template. O `kubectl patch` e idempotente, entao o
+# Deployment so rola quando o segredo realmente mudou. So o hash vai para a
+# annotation, nunca o valor.
+SECRETS_HASH="$(kubectl get secret fcg-secrets new-relic -n "$NAMESPACE" -o jsonpath='{.items[*].data}' 2>/dev/null \
   | sha256sum | cut -c1-12)"
 
 for d in users-api catalog-api payments-api; do

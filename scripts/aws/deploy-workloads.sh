@@ -11,7 +11,7 @@
 #   make pod-identity-deploy   (liga as roles as ServiceAccounts)
 # Ferramentas: aws, kubectl, helm (Windows: winget install Helm.Helm).
 #
-# Ficam de fora: 02-secret.yaml e 04-new-relic-secret.yaml (no EKS os Secrets vem do
+# Ficam de fora: os Secrets (no Minikube vem do .env via scripts/k8s/secrets.sh; no EKS vem do
 # ESO), 13/23 (DynamoDB e Lambda emulados; na AWS sao os reais) e 30-ingress.yaml
 # (nginx do Minikube; no EKS a entrada e o NLB de k8s/aws/workloads/02-kong-public.yaml).
 #

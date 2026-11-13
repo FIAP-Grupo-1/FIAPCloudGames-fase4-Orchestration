@@ -29,7 +29,7 @@
 # Variaveis de ambiente aceitas (todas opcionais):
 #   FCG_EMAIL / FCG_PASSWORD   usuario de teste (default demo@fcg.com / Senha123!)
 #   FCG_NAMESPACE              namespace do k8s (default fcg)
-#   RABBITMQ_USER / RABBITMQ_PASS   credenciais do broker (default fcg / fcg123)
+#   RABBITMQ_USER / RABBITMQ_PASS   credenciais do broker (as mesmas do .env)
 #   TRACE_TIMEOUT              segundos de espera por cada mensagem (default 60)
 #
 # Exit codes: 0 = trace atravessou; 1 = nao atravessou ou o ambiente nao permitiu
@@ -40,7 +40,7 @@ EMAIL="${FCG_EMAIL:-demo@fcg.com}"
 PASSWORD="${FCG_PASSWORD:-Senha123!}"
 NAMESPACE="${FCG_NAMESPACE:-fcg}"
 RMQ_USER="${RABBITMQ_USER:-fcg}"
-RMQ_PASS="${RABBITMQ_PASS:-fcg123}"
+RMQ_PASS="${RABBITMQ_PASS:?defina RABBITMQ_PASS (mesmo valor do .env)}"
 TIMEOUT="${TRACE_TIMEOUT:-60}"
 BODY_FILE=""
 

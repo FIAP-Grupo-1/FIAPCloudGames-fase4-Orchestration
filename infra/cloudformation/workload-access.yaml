@@ -70,6 +70,20 @@ Resources:
         PasswordLength: 64
         ExcludePunctuation: true
 
+  # Senha do admin raiz que o users-api cria no primeiro start (Seed__AdminPassword).
+  # Antes ela ficava escrita no codigo (DatabaseSeeder) e aparecia no log.
+  # Para ver: aws secretsmanager get-secret-value --secret-id fcg/eks/admin
+  AdminSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: fcg/eks/admin
+      Description: Usuario e senha do admin raiz do users-api (seed no primeiro start).
+      GenerateSecretString:
+        SecretStringTemplate: '{"email": "admin@fcg.com"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludePunctuation: true
+
   # Quem le o Secrets Manager e o controller do External Secrets Operator; os pods
   # das APIs continuam lendo um Secret comum do Kubernetes (fcg-secrets).
   ExternalSecretsRole:

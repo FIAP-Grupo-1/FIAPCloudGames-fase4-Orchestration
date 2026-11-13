@@ -37,13 +37,13 @@ flowchart LR
 
 | Onde | O quê |
 |---|---|
-| `infra/cloudformation/workload-access.yaml` (stack `fcg-workload-access`) | Segredos `fcg/eks/postgres`, `fcg/eks/redis`, `fcg/eks/rabbitmq` (`username`/`password`) e `fcg/eks/jwt` (`secretKey`), **gerados pelo próprio Secrets Manager**. Ninguém digita nem vê as senhas. Também cria as roles dos pods. |
+| `infra/cloudformation/workload-access.yaml` (stack `fcg-workload-access`) | Segredos `fcg/eks/postgres`, `fcg/eks/redis`, `fcg/eks/rabbitmq` (`username`/`password`) e `fcg/eks/jwt` (`secretKey`) e `fcg/eks/admin` (senha do admin raiz do users-api), **gerados pelo próprio Secrets Manager**. Ninguém digita nem vê as senhas. Também cria as roles dos pods. |
 | `fcg/notifications/new-relic-license-key` | License key do New Relic, criada na fase 3 e reaproveitada. |
 | `k8s/aws/workloads/00-cluster-secret-store.yaml` | Liga o External Secrets Operator ao Secrets Manager, autenticado pelo Pod Identity (sem access key). |
 | `k8s/aws/workloads/01-external-secrets.yaml` | Monta os Secrets `fcg-secrets` e `new-relic` com **as mesmas chaves** do Minikube; as connection strings são montadas a partir de usuário/senha. Os Deployments não sabem de onde o valor veio. |
 
 Postgres, Redis e RabbitMQ leem a senha do `fcg-secrets` (`secretKeyRef`), assim como as APIs e o Kong
-(chave do JWT). No Minikube o mesmo Secret vem de `k8s/02-secret.yaml` (valores de exemplo) e do `.env`.
+(chave do JWT). No Minikube o mesmo Secret é montado do `.env` pelo `scripts/k8s/secrets.sh` (nada versionado).
 
 **Acesso à AWS sem chave guardada:**
 

@@ -45,6 +45,9 @@ spec:
               valueFrom: { secretKeyRef: { name: fcg-secrets, key: AWS_SECRET_ACCESS_KEY, optional: true } }
             - name: JwtSettings__SecretKey
               valueFrom: { secretKeyRef: { name: fcg-secrets, key: JwtSettings__SecretKey } }
+            # Senha do admin raiz (seed no primeiro start). Opcional: sem ela o admin nao e criado.
+            - name: Seed__AdminPassword
+              valueFrom: { secretKeyRef: { name: fcg-secrets, key: Seed__AdminPassword, optional: true } }
             - name: ConnectionStrings__DefaultConnection
               valueFrom: { secretKeyRef: { name: fcg-secrets, key: Users__ConnectionString } }
             # Cache de usuarios (k8s/12-redis.yaml). Sem esta variavel o app tenta
