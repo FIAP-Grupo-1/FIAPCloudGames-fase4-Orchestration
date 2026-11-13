@@ -17,7 +17,7 @@ spec:
           env:
             - name: RABBITMQ_DEFAULT_USER
               value: "fcg"
-            # Mesma senha que catalog/payments usam (fcg-secrets: Minikube pelo 02-secret.yaml,
+            # Mesma senha que catalog/payments usam (fcg-secrets: Minikube pelo .env via secrets.sh,
             # EKS pelo External Secrets a partir do Secrets Manager).
             - name: RABBITMQ_DEFAULT_PASS
               valueFrom: { secretKeyRef: { name: fcg-secrets, key: RabbitMq__Password } }

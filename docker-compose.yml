@@ -55,10 +55,10 @@ services:
     image: rabbitmq:3-management
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-fcg}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-fcg123}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?defina RABBITMQ_PASS no .env (copie de .env.example)}
     ports:
       - "5672:5672"     # AMQP
-      - "15672:15672"   # Painel web: http://localhost:15672 (fcg/fcg123)
+      - "15672:15672"   # Painel web: http://localhost:15672 (RABBITMQ_USER/RABBITMQ_PASS do .env)
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -69,7 +69,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fcg}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fcg123}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env (copie de .env.example)}
       POSTGRES_DB: fcgdb            # banco do users; catalog/payments vem do init.sql
     ports:
       - "5432:5432"
@@ -92,13 +92,13 @@ services:
     command: >
       redis-server
       --user default off
-      --user ${REDIS_USER:-fcg} on ">${REDIS_PASS:-fcg123}" "~*" "&*" "+@all"
+      --user ${REDIS_USER:-fcg} on ">${REDIS_PASS:?defina REDIS_PASS no .env (copie de .env.example)}" "~*" "&*" "+@all"
       --save ""
       --appendonly no
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "--user", "${REDIS_USER:-fcg}", "--pass", "${REDIS_PASS:-fcg123}", "--no-auth-warning", "ping"]
+      test: ["CMD", "redis-cli", "--user", "${REDIS_USER:-fcg}", "--pass", "${REDIS_PASS:?defina REDIS_PASS no .env (copie de .env.example)}", "--no-auth-warning", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -110,11 +110,13 @@ services:
       dockerfile: src/FCG.API/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=fcgdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:-fcg123}"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=fcgdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env (copie de .env.example)}"
       # Cache de usuarios (chaves `user:*`/`users:*`, sem colisao com o catalogo).
       # Sem esta variavel o app tenta localhost:6379.
-      ConnectionStrings__Redis: "redis:6379,user=${REDIS_USER:-fcg},password=${REDIS_PASS:-fcg123},abortConnect=false"
-      JwtSettings__SecretKey: ${JWT_SECRET_KEY:-6a8a56f4d31a272d6e2f048f710c9cce45b51aa343fd6f73d8b69f1218eaac56}
+      ConnectionStrings__Redis: "redis:6379,user=${REDIS_USER:-fcg},password=${REDIS_PASS:?defina REDIS_PASS no .env (copie de .env.example)},abortConnect=false"
+      JwtSettings__SecretKey: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env (copie de .env.example)}
+      # Senha do admin raiz (admin@fcg.com), criado no primeiro start. Vazia = sem admin.
+      Seed__AdminPassword: ${ADMIN_PASSWORD:-}
       JwtSettings__ExpirationHours: "4"
       # Claim `iss` do token. O gateway (Kong) valida exatamente este valor -
       # por isso os dois leem a MESMA variavel JWT_ISSUER.
@@ -149,19 +151,19 @@ services:
       dockerfile: src/CatalogAPI.API/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      ConnectionStrings__DefaultConnection: "Host=postgres;Database=catalogdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:-fcg123}"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Database=catalogdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env (copie de .env.example)}"
       # Cache das leituras de jogos/biblioteca. `abortConnect=false` deixa o app subir
       # mesmo com o Redis ainda fora do ar (reconecta sozinho).
-      ConnectionStrings__Redis: "redis:6379,user=${REDIS_USER:-fcg},password=${REDIS_PASS:-fcg123},abortConnect=false"
+      ConnectionStrings__Redis: "redis:6379,user=${REDIS_USER:-fcg},password=${REDIS_PASS:?defina REDIS_PASS no .env (copie de .env.example)},abortConnect=false"
       # Catalogo le a secao `RabbitMq:`, as mesmas keys do payments-api. Injetar so a
       # URI em ConnectionStrings__RabbitMqConnection faz o app usar o guest/pass do
       # appsettings.json e o broker recusa com ACCESS_REFUSED.
       RabbitMq__Host: rabbitmq
       RabbitMq__Port: "5672"
       RabbitMq__Username: ${RABBITMQ_USER:-fcg}
-      RabbitMq__Password: ${RABBITMQ_PASS:-fcg123}
+      RabbitMq__Password: ${RABBITMQ_PASS:?defina RABBITMQ_PASS no .env (copie de .env.example)}
       RabbitMq__VirtualHost: "/"
-      JwtSettings__SecretKey: ${JWT_SECRET_KEY:-6a8a56f4d31a272d6e2f048f710c9cce45b51aa343fd6f73d8b69f1218eaac56}
+      JwtSettings__SecretKey: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env (copie de .env.example)}
       # Ativa o profiler do CLR -- sem estas 4 variaveis o pacote NewRelic.Agent
       # fica instalado em /app/newrelic mas NUNCA e carregado (agente inerte).
       CORECLR_ENABLE_PROFILING: "1"
@@ -186,13 +188,13 @@ services:
       dockerfile: src/FCG.API/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=paymentsdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:-fcg123}"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=paymentsdb;Username=${POSTGRES_USER:-fcg};Password=${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env (copie de .env.example)}"
       # RabbitMQ: consome OrderPlacedEvent do CatalogAPI e publica PaymentProcessedEvent
       # de volta (adiciona o jogo à biblioteca se aprovado).
       RabbitMq__Host: rabbitmq
       RabbitMq__Port: "5672"
       RabbitMq__Username: ${RABBITMQ_USER:-fcg}
-      RabbitMq__Password: ${RABBITMQ_PASS:-fcg123}
+      RabbitMq__Password: ${RABBITMQ_PASS:?defina RABBITMQ_PASS no .env (copie de .env.example)}
       RabbitMq__VirtualHost: "/"
       # SNS: publica o MESMO PaymentProcessedEvent para a Lambda do NotificationsAPI.
       Sns__TopicArn: ${SNS_PAYMENT_EVENTS_TOPIC_ARN:-arn:aws:sns:us-east-1:450753703903:fcg-payment-events}
@@ -292,7 +294,7 @@ services:
       # Mantem o X-Kong-*-Latency e derruba o `Server: kong/3.9`.
       KONG_HEADERS: "latency_tokens"
       # Mesma chave que users-api usa para EMITIR e catalog-api para VALIDAR.
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-6a8a56f4d31a272d6e2f048f710c9cce45b51aa343fd6f73d8b69f1218eaac56}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env (copie de .env.example)}
       # Mesma variavel que o users-api usa em JwtSettings__Issuer.
       JWT_ISSUER: ${JWT_ISSUER:-FCG}
     volumes:

@@ -152,7 +152,7 @@ curl -s -X POST http://localhost:8000/catalog/api/v1/games \
 > `genre` é o índice do enum: 0 Action, 1 RPG, 2 Strategy, 3 Sports, 4 Puzzle, 5 Other.
 
 Portas locais: **gateway (Kong) `8000`**, users `8081`, catalog `8082`, payments `8083`, notifications `8084` (cadastro) e `8085` (pagamento) direto no emulador da Lambda (interno sempre `8080`).
-Painel do RabbitMQ: http://localhost:15672 (fcg/fcg123).
+Painel do RabbitMQ: http://localhost:15672 (`RABBITMQ_USER`/`RABBITMQ_PASS` do `.env`).
 
 > As portas diretas (8081-8085) continuam abertas para debug, mas o caminho "oficial" de `users`, `catalog`, `payments` e `notifications` agora é o gateway na `8000` -- ver [API Gateway (Kong)](#api-gateway-kong).
 
@@ -218,11 +218,11 @@ Inspecionar o cache:
 ```bash
 # k8s
 kubectl exec -n fcg deploy/redis -- \
-  redis-cli --user fcg --pass fcg123 --no-auth-warning KEYS '*'
+  sh -c 'redis-cli --user fcg --pass "$REDIS_PASSWORD" --no-auth-warning KEYS "*"'
 
 # Compose
 docker-compose exec redis \
-  redis-cli --user fcg --pass fcg123 --no-auth-warning KEYS '*'
+  redis-cli --user fcg --pass "$REDIS_PASS" --no-auth-warning KEYS '*'
 ```
 
 > **Escrita não invalida a leitura.** Hoje o `catalog-api` só remove a chave `games:{id}`
@@ -394,12 +394,13 @@ O `JWT_SECRET_KEY` (mesma chave HMAC de users e catalog) **não** está versiona
 | Ambiente | De onde vem o segredo |
 |---|---|
 | Compose | `JWT_SECRET_KEY` no `.env` |
-| Kubernetes | key `JwtSettings__SecretKey` do Secret `fcg-secrets` (`k8s/02-secret.yaml`) |
+| Minikube | key `JwtSettings__SecretKey` do Secret `fcg-secrets`, montado do `JWT_SECRET_KEY` do `.env` pelo `scripts/k8s/secrets.sh` |
+| EKS | mesma key, montada pelo External Secrets a partir do Secrets Manager (`fcg/eks/jwt`) |
 
-A key é a **mesma** que alimenta o `users-api` (que emite o token) e o `catalog-api` (que também valida): uma entrada no Secret, três consumidores. Trocar a chave é editar `k8s/02-secret.yaml` e reiniciar os três -- se reiniciar só parte deles, os tokens novos deixam de casar com quem ficou com a chave antiga:
+A key é a **mesma** que alimenta o `users-api` (que emite o token) e o `catalog-api` (que também valida): uma entrada no Secret, três consumidores. Trocar a chave no Minikube é editar o `.env`, rodar `make k8s-secrets` e reiniciar os três -- se reiniciar só parte deles, os tokens novos deixam de casar com quem ficou com a chave antiga:
 
 ```bash
-kubectl apply -f k8s/02-secret.yaml
+make k8s-secrets
 kubectl rollout restart deployment/users-api deployment/catalog-api deployment/kong -n fcg
 ```
 
@@ -924,7 +925,7 @@ curl -X POST http://users.fcg.local/api/users/register \
 curl http://catalog.fcg.local/api/v1/games
 ```
 
-O painel de gestão do RabbitMQ também sai pelo mesmo túnel, em `http://rabbitmq.fcg.local` (login `fcg` / `fcg123`).
+O painel de gestão do RabbitMQ também sai pelo mesmo túnel, em `http://rabbitmq.fcg.local` (login `RABBITMQ_USER`/`RABBITMQ_PASS` do `.env`).
 
 > **Por que por hostname e não por caminho (`/users`, `/catalog`)?** Cada API já tem seus próprios prefixos de rota (`/api/users/...`, `/api/v1/games`, etc.), diferentes entre si. Rotear por path exigiria reescrever a URL antes de repassar pro serviço (`rewrite-target`), o que complica sem necessidade aqui. Rotear por hostname mantém as rotas originais intactas — cada domínio aponta pra um Service só.
 >
@@ -1181,7 +1182,8 @@ Recursos provisionados na AWS (conta usada pelo grupo, região `us-east-1`):
 | `AWS_SECRET_ACCESS_KEY` | Sim | — | Sim | Secret |
 | `JwtSettings__SecretKey` | Sim | Sim | — | Secret |
 | `ASPNETCORE_ENVIRONMENT` | Sim | Sim | Sim | ConfigMap |
-| `NEW_RELIC_LICENSE_KEY` | Sim | Sim | Sim | Secret (`k8s/04-new-relic-secret.yaml`) |
+| `NEW_RELIC_LICENSE_KEY` | Sim | Sim | Sim | Secret `new-relic` (Minikube: `.env` via `secrets.sh`; EKS: External Secrets) |
+| `Seed__AdminPassword` | Sim | — | — | Secret (`ADMIN_PASSWORD` no `.env`; EKS: `fcg/eks/admin`) |
 | `CORECLR_ENABLE_PROFILING` | Sim | Sim | Sim | fixa no manifesto/Compose |
 | `CORECLR_PROFILER` | Sim | Sim | Sim | fixa no manifesto/Compose |
 | `CORECLR_NEWRELIC_HOME` | Sim | Sim | Sim | fixa no manifesto/Compose |
@@ -1221,14 +1223,14 @@ No `.env`, `NOTIFICATIONS_API_PATH` diz onde está o repo do NotificationsAPI (d
 
 ## Observabilidade (New Relic)
 
-O grupo optou pela **Opção B** do enunciado (plataforma de APM gerenciada): **New Relic**, cobrindo os três pilares (métricas, logs e traces) em `UsersAPI`, `CatalogAPI`, `PaymentsAPI` e na função serverless. Detalhes em [`docs/observability.md`](docs/observability.md). O salto pelo RabbitMQ é o ponto delicado dos traces — a instrumentação automática do agente não cobre o cliente AMQP que usamos, e a propagação é feita no código dos serviços: ver [Propagação de trace pelo RabbitMQ](#propagação-de-trace-pelo-rabbitmq). A license key é injetada via Kubernetes Secret (`k8s/04-new-relic-secret.yaml`) e, localmente, pela variável `NEW_RELIC_LICENSE_KEY` no `.env` (ver `.env.example`); nunca é commitada em texto puro no código-fonte, conforme exigido pelo enunciado para a Opção B.
+O grupo optou pela **Opção B** do enunciado (plataforma de APM gerenciada): **New Relic**, cobrindo os três pilares (métricas, logs e traces) em `UsersAPI`, `CatalogAPI`, `PaymentsAPI` e na função serverless. Detalhes em [`docs/observability.md`](docs/observability.md). O salto pelo RabbitMQ é o ponto delicado dos traces — a instrumentação automática do agente não cobre o cliente AMQP que usamos, e a propagação é feita no código dos serviços: ver [Propagação de trace pelo RabbitMQ](#propagação-de-trace-pelo-rabbitmq). A license key é injetada via Kubernetes Secret `new-relic` (montado do `.env` no Minikube e do Secrets Manager no EKS) e, no Compose, pela variável `NEW_RELIC_LICENSE_KEY` no `.env` (ver `.env.example`); nunca é commitada em texto puro no código-fonte, conforme exigido pelo enunciado para a Opção B.
 
-Como o manifesto `k8s/04-new-relic-secret.yaml` é versionado, ele guarda apenas um
-**placeholder**. Quem põe o valor real no cluster é o `scripts/k8s/secrets.sh`, que lê o
-`.env` (a mesma fonte do Compose) e sobrepõe os segredos **depois** do `kubectl apply` —
-a license key do New Relic e as credenciais AWS de `fcg-secrets`. O `deploy.sh` já o chama,
+Nenhum Secret é versionado (os antigos `k8s/02-secret.yaml` e `k8s/04-new-relic-secret.yaml`
+saíram do repositório). Quem monta `fcg-secrets` e `new-relic` no Minikube é o
+`scripts/k8s/secrets.sh`, que lê o `.env` (a mesma fonte do Compose) **antes** do
+`kubectl apply`, para os pods já nascerem com o Secret pronto. O `deploy.sh` já o chama,
 então `make k8s-up` faz isso sozinho; para reaplicar depois de trocar um valor no `.env`,
-use `make k8s-secrets`.
+use `make k8s-secrets`. No EKS os mesmos Secrets vêm do Secrets Manager (External Secrets).
 
 Como Secret lido por variável de ambiente só é resolvido na criação do container, o script
 grava o **hash** dos valores numa annotation do pod template (mesma técnica do ConfigMap do
@@ -1330,7 +1332,7 @@ Duas armadilhas que o script trata, as duas já custaram tempo aqui:
   aplicação. O script nunca a usa como gateway, e você também não deveria.
 
 Variáveis opcionais: `FCG_EMAIL`, `FCG_PASSWORD`, `FCG_NAMESPACE` (default `fcg`),
-`RABBITMQ_USER`/`RABBITMQ_PASS` (default `fcg`/`fcg123`) e `TRACE_TIMEOUT` (segundos de
+`RABBITMQ_USER`/`RABBITMQ_PASS` (os mesmos do `.env`) e `TRACE_TIMEOUT` (segundos de
 espera por cada mensagem, default `60`).
 
 > **Enquanto as correções do `catalog-api` e do `payments-api` não estiverem mergeadas *e*
