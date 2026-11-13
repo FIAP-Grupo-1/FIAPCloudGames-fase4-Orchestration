@@ -1,4 +1,170 @@
-# FCG Orchestration (Fase 3)
+# FIAP Cloud Games: Fase 4 (AWS + EKS)
+
+Este é o **README central** da entrega da Fase 4 do Tech Challenge. O repositório `Orchestration` junta a
+infraestrutura como código (CloudFormation), os manifestos Kubernetes, os scripts de subida/derrubada e a
+documentação. Cada microsserviço vive no seu próprio repositório, com a sua pipeline.
+
+> A base da Fase 3 (Kong, New Relic, Lambda, Minikube e docker compose) continua valendo para o
+> desenvolvimento local e está documentada a partir de [Desenvolvimento local (base da Fase 3)](#desenvolvimento-local-base-da-fase-3).
+
+## Fase 4 em um minuto
+
+| Requisito do enunciado | Como atendemos | Onde está |
+|---|---|---|
+| Kubernetes gerenciado | **Amazon EKS** 1.37, efêmero (sobe e desce por comando), 2 nodes `c7i-flex.large` | `infra/cloudformation/eks.yaml`, `make cluster-up` |
+| Registry privado | **Amazon ECR** `fcg/users-api`, `fcg/catalog-api`, `fcg/payments-api` (tags imutáveis, scan no push) | `infra/cloudformation/ecr.yaml` |
+| Acesso externo | **NLB** na frente do Kong (API Gateway) | `k8s/aws/workloads/02-kong-public.yaml` |
+| NoSQL | **DynamoDB** `fcg-notifications` (driver `AWSSDK.DynamoDBv2`), gravado pela Lambda do NotificationsAPI | [NoSQL](#nosql-dynamodb) |
+| Cache distribuído | **Redis** (`StackExchange.Redis`) no CatalogAPI e no UsersAPI, com TTL e invalidação | [Cache e benchmark](#cache-redis-e-benchmark) |
+| Busca avançada | **OpenSearch** gerenciado, endpoint `/search` com fuzzy e relevância | [Busca](#busca-avançada-opensearch) |
+| CI/CD | **GitHub Actions**: testes, scan de segurança, imagem versionada, push no ECR e rolling update no EKS | [Repositórios e pipelines](#repositórios-e-pipelines) |
+| Zero downtime | `RollingUpdate` com `maxUnavailable: 0`, readiness probe e `preStop` | `make zero-downtime-check` |
+| Zero credenciais | **Secrets Manager** + **External Secrets Operator**; pods e pipelines sem access key (Pod Identity e OIDC) | [Segredos](#segredos-zero-credenciais-no-código) |
+
+## Arquitetura na AWS
+
+```mermaid
+flowchart LR
+  user([Cliente]) -->|HTTP| nlb[NLB<br/>kong-public]
+  subgraph eks[EKS - namespace fcg]
+    nlb --> kong[Kong<br/>JWT + rate limit]
+    kong --> users[users-api]
+    kong --> catalog[catalog-api]
+    kong --> payments[payments-api]
+    users --> pg[(Postgres<br/>EBS gp3)]
+    catalog --> pg
+    payments --> pg
+    users --> redis[(Redis<br/>cache)]
+    catalog --> redis
+    catalog <-->|OrderPlaced / PaymentProcessed| rabbit[[RabbitMQ]]
+    payments <--> rabbit
+    eso[External Secrets<br/>Operator] -->|cria| sec[/Secrets<br/>fcg-secrets, new-relic/]
+  end
+  catalog -->|indexa e busca| os[(OpenSearch<br/>gerenciado)]
+  sm[(Secrets Manager<br/>fcg/eks/*)] -->|Pod Identity| eso
+  users -->|UserRegistered<br/>Pod Identity| sns1{{SNS fcg-user-events}}
+  payments -->|PaymentProcessed<br/>Pod Identity| sns2{{SNS fcg-payment-events}}
+  sns1 --> sqs[[SQS]]
+  sns2 --> sqs
+  sqs --> lambda[Lambda<br/>NotificationsAPI]
+  lambda --> ddb[(DynamoDB<br/>fcg-notifications)]
+  gha[GitHub Actions] -->|OIDC: push| ecr[(ECR fcg/*)]
+  gha -->|OIDC: kubectl set image| eks
+  gha -->|OIDC: sam deploy| lambda
+  ecr -->|imagens| eks
+```
+
+Rede e cluster em detalhe (VPC, subnets, NAT, single AZ): [`docs/arquitetura-aws.png`](docs/arquitetura-aws.png)
+e [Rede e cluster EKS](#rede-e-cluster-eks-vpcyaml--eksyaml).
+
+**Decisão: Postgres, Redis e RabbitMQ dentro do cluster.** Rodam como pods (Postgres com disco EBS `gp3`),
+com senha vinda do Secrets Manager. Os equivalentes gerenciados (RDS, ElastiCache, Amazon MQ) cobram por
+hora mesmo parados e o cluster é efêmero; o requisito de serviço gerenciado do enunciado é o do
+Kubernetes (EKS) e o da busca (OpenSearch).
+
+## Repositórios e pipelines
+
+Organização: [FIAP-Grupo-1](https://github.com/FIAP-Grupo-1).
+
+| Repositório | Pipeline (GitHub Actions) |
+|---|---|
+| [UsersAPI](https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-UsersAPI) | PR: testes unitários e de integração (Testcontainers), smoke test em container, lint, security scan (Trivy na imagem, Gitleaks, CodeQL, dependências NuGet). `main`/tag `v*`: testes → imagem `sha-<commit>` ou `v*` no ECR → **deploy no EKS** (`kubectl set image` + `rollout status`) |
+| [CatalogAPI](https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-CatalogAPI) | igual à UsersAPI |
+| [PaymentsAPI](https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-PaymentsAPI) | build da imagem e push no ECR |
+| [NotificationsAPI](https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-NotificationsAPI) | build, testes e estilo; na `main`, **`sam deploy`** da Lambda (alias `prod` passa para a versão nova) |
+| [Orchestration](https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-Orchestration) | IaC (CloudFormation), manifestos `k8s/`, scripts e esta documentação |
+
+- **Sem access key no GitHub:** cada pipeline assume uma role IAM por OIDC (`fcg-gha-*`), que só aceita a
+  `main` (e tags `v*`) do próprio repositório ([`github-oidc.yaml`](#acesso-do-github-actions-ao-ecr-github-oidcyaml)).
+- **Tags de imagem:** `sha-<commit>` a cada merge (expira em 15 dias) e `v*` nas releases (nunca expira). O
+  `make workloads-deploy` usa a maior `v*` de cada repositório.
+- **Cluster desligado:** o job de deploy vira aviso ("deploy pulado"), a imagem fica no ECR e entra no próximo
+  `make workloads-deploy`.
+
+## Como subir e derrubar (EKS)
+
+Pré-requisitos: AWS CLI com o seu usuário `fcg-<nome>`, `kubectl`, `helm` e `make` (no Windows, Git Bash).
+
+```bash
+make cluster-up          # rede + EKS + Pod Identity + acesso do grupo (15-20 min)
+make workloads-deploy    # External Secrets, Secrets, 7 deployments e o endereço público (NLB)
+make zero-downtime-check # robô acessando o site durante um rolling update: "erros: 0"
+make cluster-down        # derruba tudo que cobra por hora (10-15 min)
+
+make e2e                 # tudo acima + testes pelo NLB, e derruba no fim (mesmo se falhar)
+make e2e KEEP_CLUSTER=1  # para gravar o vídeo: sobe, testa e deixa ligado
+```
+
+- **Uma pessoa sobe cluster por vez.** Dois `cluster-up` ao mesmo tempo disputam a mesma stack.
+- **Custo:** ~US$ 0,32/h ligado (control plane + NAT + 2 nodes). Nada cobra por hora com o cluster desligado;
+  o alerta de orçamento (US$ 5/mês) avisa por e-mail.
+- Detalhes: [`docs/eks-workloads-e-segredos.md`](docs/eks-workloads-e-segredos.md).
+
+## Segredos: zero credenciais no código
+
+| Onde | De onde vem a credencial |
+|---|---|
+| Pods no EKS | Secrets Manager (`fcg/eks/postgres`, `redis`, `rabbitmq`, `jwt`, `admin`), senhas **geradas pela AWS**; o External Secrets monta os Secrets `fcg-secrets` e `new-relic` |
+| Pods chamando a AWS (SNS) | Pod Identity: role por ServiceAccount, sem access key |
+| Pipelines | OIDC do GitHub → role IAM temporária |
+| Minikube e docker compose | `.env` local (nunca versionado), a partir do `.env.example` |
+| `dotnet run` | `dotnet user-secrets` |
+
+Os `appsettings*.json` só têm as chaves vazias, e a API recusa subir sem a chave do JWT. A senha do admin
+raiz (`admin@fcg.com`) também vem do cofre (`Seed__AdminPassword`).
+
+**Histórico do Git:** versões antigas dos repositórios ainda contêm valores de exemplo da Fase 3 (como a
+senha `fcg123` do Postgres local). Nenhum deles vale no ambiente da AWS: lá todas as senhas e a chave do JWT
+foram geradas pelo Secrets Manager e nunca passaram pelo repositório.
+
+## NoSQL: DynamoDB
+
+A Lambda do NotificationsAPI grava cada notificação na tabela `fcg-notifications`:
+
+| Chave | Valor | Por quê |
+|---|---|---|
+| `PK` | `EVENT#<id do evento>` | gravação condicional: a mesma mensagem nunca vira duas notificações |
+| `GSI1-UserId` | `UserId` + `CreatedAt` | listar as notificações de um usuário, em ordem, sem varrer a tabela |
+
+Por que NoSQL ali: é registro de evento, com formato que varia por tipo e sem relação com outras tabelas.
+Fluxo completo: users-api → SNS → SQS → Lambda → DynamoDB (testado pelo `make e2e`). Detalhes em
+[`docs/eks-workloads-e-segredos.md`](docs/eks-workloads-e-segredos.md#nosql-dynamodb-do-notificationsapi).
+
+## Cache Redis e benchmark
+
+O CatalogAPI guarda em cache a listagem de jogos (TTL 3 min), o detalhe de um jogo (20 min) e a biblioteca
+do usuário (3 min), e invalida ao criar, editar ou excluir um jogo e ao processar uma compra. A
+configuração `Cache:Enabled` liga e desliga o cache sem mudar código, para comparar os dois cenários.
+
+O benchmark usa k6 (`performance/games.js` no CatalogAPI) contra `GET /api/v1/games`, com até 50 usuários
+virtuais, e manda as métricas para InfluxDB + Grafana.
+
+> **Resultado:** _a preencher após o ensaio (tempo médio e p95 com e sem cache, requisições por segundo)._
+
+## Busca avançada (OpenSearch)
+
+> _A preencher com a entrega da busca: domínio OpenSearch, indexação no CatalogAPI ao criar e editar
+> jogos, endpoint `/search` com fuzzy e ordenação por relevância, exemplos de chamada._
+
+## Live deploy (roteiro do vídeo)
+
+1. Cluster no ar com `make e2e KEEP_CLUSTER=1`; mostrar o console da AWS (EKS, ECR, Secrets Manager) e
+   `kubectl get pods -n fcg`.
+2. Em outro terminal, `make zero-downtime-check` acessando o site sem parar.
+3. Alterar algo visível na UsersAPI ou CatalogAPI, abrir o PR e fazer o merge.
+4. Mostrar a pipeline: testes → push no ECR → deploy no EKS (`kubectl rollout status`).
+5. Os pods trocando um a um e o robô terminando com `erros: 0`.
+6. No fim: `make cluster-down`.
+
+## Acesso da equipe à AWS
+
+Cada integrante tem o seu usuário IAM (`fcg-<nome>`, stack `fcg-team-access`): console só com MFA e
+access key própria para a CLI. Assim, uma chave vazada é trocada sem afetar os outros, e o CloudTrail
+mostra quem fez o quê.
+
+---
+
+# Desenvolvimento local (base da Fase 3)
 
 Repositório de **orquestração** da FIAP Cloud Games (Fase 3). Parte da base da Fase 2 (RabbitMQ, PostgreSQL, `docker-compose` e manifestos Kubernetes) e concentra aqui as novas capacidades obrigatórias do Tech Challenge: **API Gateway (Kong)** (feito, cobrindo `users-api`, `catalog-api`, `payments-api` e, localmente, o `NotificationsAPI` -- ver [API Gateway (Kong)](#api-gateway-kong)), **Observabilidade (New Relic)**, **NoSQL (DynamoDB)**, **Redis** e a migração do `NotificationsAPI` para **Serverless (AWS Lambda)**.
 
@@ -420,7 +586,7 @@ No k8s, a **Admin API escuta apenas em `127.0.0.1`** dentro do pod (`KONG_ADMIN_
 ```bash
 kubectl port-forward deploy/kong 8001:8001 -n fcg     # em outro terminal
 curl -s localhost:8001/consumers/fcg-users-api/jwt | jq '.data[0]'
-#   ...,"key":"FCG","secret":"6a8a56f4..."     <- o segredo, em texto
+#   ...,"key":"FCG","secret":"<chave do JWT>"     <- o segredo, em texto
 ```
 
 Sem esse bind, qualquer pod do cluster leria o segredo do JWT com um `curl`. O `port-forward` continua funcionando porque ele entra na **network namespace do pod** e disca o `127.0.0.1` de dentro dele -- e por isso a Admin API segue acessível para quem já tem credencial no cluster, e só para essa pessoa.
