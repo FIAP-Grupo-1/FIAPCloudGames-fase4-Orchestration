@@ -221,6 +221,10 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:fcg/notifications/*'
+              # Com role de servico, o CloudFormation processa o transform do SAM com ela.
+              - Effect: Allow
+                Action: cloudformation:CreateChangeSet
+                Resource: !Sub 'arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31'
               # O SAM le o pacote da funcao no bucket gerenciado dele.
               - Effect: Allow
                 Action: s3:GetObject
