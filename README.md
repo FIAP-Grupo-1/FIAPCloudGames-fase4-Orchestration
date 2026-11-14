@@ -160,11 +160,11 @@ lendo e gravando no banco, e o OpenSearch serve só a busca.
   fora do ar, a escrita no Postgres segue normalmente e o erro vai para o log. Toda vez que o catalog-api
   sobe, ele recria o índice a partir do Postgres (índice novo + troca de alias, sem deixar a busca vazia
   durante o rolling update), o que cobre a carga inicial e corrige qualquer jogo que tenha ficado para trás.
-- **Busca:** `GET /api/v1/games/search?q=<termo>&page=1&pageSize=20` (pelo Kong:
-  `/catalog/api/v1/games/search`, com JWT). Consulta `multi_match` em título (peso 3) e descrição, com
-  `fuzziness: AUTO` (1 erro de digitação em termos de 3 a 5 letras, 2 a partir de 6) e acentos ignorados
-  ("pokemon" acha "Pokémon"). O resultado vem ordenado por relevância, com o `score` de cada jogo; jogos
-  desativados não aparecem.
+- **Busca:** `GET /api/v1/games/search?term=&genre=&minPrice=&maxPrice=&page=&size=` (pelo Kong:
+  `/catalog/api/v1/games/search`, com JWT). O `term` vira um `multi_match` em título (peso 3) e
+  descrição, com `fuzziness: AUTO:4,7` (1 erro de digitação em termos de 4 a 6 letras, 2 a partir de 7) e
+  acentos ignorados ("pokemon" acha "Pokémon"). O resultado vem ordenado por relevância, com o `score` de
+  cada jogo. Gênero e faixa de preço filtram sem mexer no score, e jogos desativados não aparecem.
 - **Custo:** o domínio cobra por hora (~US$ 0,04), então é efêmero como o cluster: o `cluster-up` cria em
   paralelo com o EKS e o `cluster-down` apaga. Para testar só a busca, sem cluster: `make search-up` /
   `make search-down`.
@@ -172,16 +172,17 @@ lendo e gravando no banco, e o OpenSearch serve só a busca.
 Exemplo (o jogo é "The Witcher 3: Wild Hunt"; "witchr" tem um erro de digitação):
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" "http://$NLB/catalog/api/v1/games/search?q=witchr"
+curl -H "Authorization: Bearer $TOKEN" "http://$NLB/catalog/api/v1/games/search?term=witchr"
 ```
 
 ```json
-{ "data": { "query": "witchr", "total": 2, "games": [
-  { "title": "The Witcher 3: Wild Hunt", "genre": "RPG", "score": 3.18 },
-  { "title": "Gwent: The Card Game", "genre": "Strategy", "score": 0.98 } ] } }
+{ "data": { "total": 2, "games": [
+  { "title": "The Witcher 3: Wild Hunt", "genre": "RPG", "price": 99.9, "score": 2.31 },
+  { "title": "Gwent: The Card Game", "genre": "Strategy", "price": 0, "score": 0.34 } ] } }
 ```
 
-O Gwent aparece porque tem "Witcher" na descrição, e fica abaixo porque o título pesa mais.
+O Gwent aparece porque tem "Witcher" na descrição, e fica abaixo porque o título pesa mais. Com filtro,
+`?term=witcher&maxPrice=10` traz só o Gwent, e `?genre=RPG` lista só os RPGs.
 
 Localmente, o `docker-compose.yml` sobe um OpenSearch sem o plugin de segurança e liga a busca no catalog-api.
 No Minikube a busca fica desligada (`Search__Enabled` ausente): o catálogo funciona e só o `/search`
