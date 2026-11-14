@@ -44,3 +44,12 @@ Resources:
       Namespace: !Ref AppNamespace
       ServiceAccount: payments-api
       RoleArn: !ImportValue fcg-eks-payments-api-role-arn
+
+  # catalog-api: assina as chamadas ao OpenSearch (opensearch.yaml) com esta role.
+  CatalogApiAssociation:
+    Type: AWS::EKS::PodIdentityAssociation
+    Properties:
+      ClusterName: !Ref ClusterName
+      Namespace: !Ref AppNamespace
+      ServiceAccount: catalog-api
+      RoleArn: !ImportValue fcg-eks-catalog-api-role-arn

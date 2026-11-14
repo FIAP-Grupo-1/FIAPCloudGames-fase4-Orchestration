@@ -166,7 +166,43 @@ Resources:
                   - 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${Topic}'
                   - Topic: !FindInMap [Sns, Topics, PaymentEvents]
 
+  # Busca no Amazon OpenSearch (opensearch.yaml) sem usuario nem senha: o catalog-api
+  # assina as requisicoes (SigV4) com esta role. O dominio e efemero, mas a role fica
+  # aqui (IAM e gratuito) para o ARN existir antes do dominio, que o referencia na
+  # politica de acesso.
+  CatalogApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: fcg-eks-catalog-api
+      Description: catalog-api no EKS (Pod Identity) - indexa e busca jogos no OpenSearch
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: pods.eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+      Policies:
+        - PolicyName: opensearch-http
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - es:ESHttpGet
+                  - es:ESHttpHead
+                  - es:ESHttpPost
+                  - es:ESHttpPut
+                  - es:ESHttpDelete
+                Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/fcg-search/*'
+
 Outputs:
+  CatalogApiRoleArn:
+    Value: !GetAtt CatalogApiRole.Arn
+    Export:
+      Name: fcg-eks-catalog-api-role-arn
   ExternalSecretsRoleArn:
     Value: !GetAtt ExternalSecretsRole.Arn
     Export:
