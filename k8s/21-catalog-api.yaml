@@ -15,6 +15,8 @@ spec:
     metadata:
       labels: { app: catalog-api }
     spec:
+      # No EKS recebe a role do OpenSearch via Pod Identity (05-service-accounts.yaml).
+      serviceAccountName: catalog-api
       containers:
         - name: catalog-api
           image: fcg/catalog-api:1.0
@@ -46,6 +48,15 @@ spec:
             # variável o app tenta localhost:6379 e devolve 500 em toda leitura.
             - name: ConnectionStrings__Redis
               valueFrom: { secretKeyRef: { name: fcg-secrets, key: Catalog__RedisConnection } }
+            # Busca no Amazon OpenSearch. O ConfigMap fcg-search so existe no EKS (criado
+            # pelo scripts/aws/deploy-workloads.sh com o endpoint da stack fcg-search);
+            # sem ele (Minikube) as variaveis ficam vazias e a busca fica desligada.
+            - name: Search__Enabled
+              valueFrom: { configMapKeyRef: { name: fcg-search, key: Search__Enabled, optional: true } }
+            - name: Search__Endpoint
+              valueFrom: { configMapKeyRef: { name: fcg-search, key: Search__Endpoint, optional: true } }
+            - name: Search__UseAwsSigV4
+              valueFrom: { configMapKeyRef: { name: fcg-search, key: Search__UseAwsSigV4, optional: true } }
             # Ativa o profiler do CLR. Sem estas 4 variaveis o pacote NewRelic.Agent
             # fica instalado em /app/newrelic mas NUNCA e carregado (agente inerte).
             # O GUID precisa de aspas: sem elas o YAML leria {..} como um mapa.

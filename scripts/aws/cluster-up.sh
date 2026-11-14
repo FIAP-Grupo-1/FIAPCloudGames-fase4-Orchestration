@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Sobe o cluster EKS efemero da FCG:
 #   1. rede permanente (stack fcg-network; idempotente, normalmente "No changes")
-#   2. cluster, NAT e nodes (stack fcg-eks; 15-20 min)
+#   2. cluster, NAT e nodes (stack fcg-eks; 15-20 min) e, em paralelo, o Amazon
+#      OpenSearch da busca do catalog-api (stack fcg-search; mesmos 15-20 min)
 #   3. Pod Identity (stack fcg-pod-identity), se os segredos/roles (fcg-workload-access)
 #      ja existirem
 #   4. kubectl apontando para o cluster + manifestos que so valem na AWS (k8s/aws/)
 #
 # Os workloads sobem depois, com `make workloads-deploy`.
 #
-# Tudo da stack fcg-eks e cobrado por hora. Derrube com `make cluster-down` quando
+# Tudo das stacks fcg-eks e fcg-search e cobrado por hora. Derrube com `make cluster-down` quando
 # terminar de usar.
 set -euo pipefail
 
@@ -22,6 +23,7 @@ REGION="${AWS_REGION:-us-east-1}"
 NETWORK_STACK="${NETWORK_STACK:-fcg-network}"
 EKS_STACK="${EKS_STACK:-fcg-eks}"
 POD_IDENTITY_STACK="${POD_IDENTITY_STACK:-fcg-pod-identity}"
+SEARCH_STACK="${SEARCH_STACK:-fcg-search}"
 SECRETS_STACK="${SECRETS_STACK:-fcg-workload-access}"
 TEAM_STACK="${TEAM_STACK:-fcg-team-access}"
 CLUSTER_NAME="${CLUSTER_NAME:-fcg}"
@@ -73,6 +75,23 @@ aws cloudformation deploy \
   --region "$REGION" \
   --no-fail-on-empty-changeset
 
+# OpenSearch (busca do catalog-api): leva os mesmos 15-20 min do EKS e nao depende
+# dele, entao sobe em paralelo. A politica de acesso referencia a role do catalog-api,
+# que vem da fcg-workload-access.
+search_pid=""
+search_log="$(mktemp)"
+if stack_exists "$SECRETS_STACK"; then
+  echo "==> [2/4] OpenSearch ($SEARCH_STACK) em paralelo - log em $search_log"
+  aws cloudformation deploy \
+    --template-file infra/cloudformation/opensearch.yaml \
+    --stack-name "$SEARCH_STACK" \
+    --region "$REGION" \
+    --no-fail-on-empty-changeset >"$search_log" 2>&1 &
+  search_pid=$!
+else
+  echo "==> [2/4] OpenSearch: pulado ($SECRETS_STACK nao existe; rode 'make secrets-deploy')"
+fi
+
 echo "==> [2/4] Cluster EKS ($EKS_STACK) - leva de 15 a 20 minutos"
 aws cloudformation deploy \
   --template-file infra/cloudformation/eks.yaml \
@@ -94,6 +113,18 @@ if stack_exists "$SECRETS_STACK"; then
 else
   echo "==> [3/4] Pod Identity: pulado ($SECRETS_STACK nao existe; rode 'make secrets-deploy' antes do workloads-deploy)"
 fi
+
+if [ -n "$search_pid" ]; then
+  echo "==> [3/4] Aguardando o OpenSearch ($SEARCH_STACK)"
+  if ! wait "$search_pid"; then
+    cat "$search_log" >&2
+    echo "!! O OpenSearch falhou; o cluster esta no ar, mas a busca vai ficar desligada." >&2
+    echo "   Veja os eventos: aws cloudformation describe-stack-events --stack-name $SEARCH_STACK" >&2
+    exit 1
+  fi
+  tail -n 1 "$search_log"
+fi
+rm -f "$search_log"
 
 echo "==> [4/4] kubectl e manifestos da AWS"
 # --alias fcg-eks: o contexto ganha um nome legivel. Atencao: ele vira o contexto

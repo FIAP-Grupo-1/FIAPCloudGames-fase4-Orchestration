@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  FCG - Amazon OpenSearch gerenciado para a busca de jogos do catalog-api (endpoint
+  /api/v1/games/search, fuzzy e relevancia). Efemero como o cluster: o cluster-up cria
+  junto com a fcg-eks e o cluster-down apaga (cobra por hora, ~US$ 0,04 com 1 t3.small).
+
+# Acesso so por IAM (requisicoes assinadas com SigV4), sem usuario nem senha:
+#   - o catalog-api assina com a role fcg-eks-catalog-api, que recebe via Pod Identity
+#     (workload-access.yaml + pod-identity.yaml), entao nenhuma credencial existe;
+#   - quem administra a conta (CLI com AWS_PROFILE) tambem pode chamar, para testes.
+# Endpoint publico em vez de VPC: o dominio nao fica amarrado aos security groups do
+# cluster efemero e da para testar do notebook sem cluster ligado. Sem a assinatura,
+# o dominio responde 403.
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: fcg-search
+  InstanceType:
+    Type: String
+    Default: t3.small.search
+
+Resources:
+  SearchDomain:
+    Type: AWS::OpenSearchService::Domain
+    Properties:
+      DomainName: !Ref DomainName
+      EngineVersion: OpenSearch_2.19
+      ClusterConfig:
+        InstanceType: !Ref InstanceType
+        InstanceCount: 1
+        DedicatedMasterEnabled: false
+        ZoneAwarenessEnabled: false
+      EBSOptions:
+        EBSEnabled: true
+        VolumeType: gp3
+        VolumeSize: 10
+      EncryptionAtRestOptions:
+        Enabled: true
+      NodeToNodeEncryptionOptions:
+        Enabled: true
+      DomainEndpointOptions:
+        EnforceHTTPS: true
+        TLSSecurityPolicy: Policy-Min-TLS-1-2-2019-07
+      AccessPolicies:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !ImportValue fcg-eks-catalog-api-role-arn
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - es:ESHttpGet
+              - es:ESHttpHead
+              - es:ESHttpPost
+              - es:ESHttpPut
+              - es:ESHttpDelete
+            Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${DomainName}/*'
+
+Outputs:
+  Endpoint:
+    Description: Valor de Search__Endpoint no catalog-api (o deploy-workloads le daqui).
+    Value: !Sub 'https://${SearchDomain.DomainEndpoint}'
+    Export:
+      Name: fcg-search-endpoint

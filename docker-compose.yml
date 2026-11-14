@@ -103,6 +103,25 @@ services:
       timeout: 5s
       retries: 10
 
+  # Busca de jogos do catalog-api. Localmente sem o plugin de seguranca (sem TLS nem
+  # senha, so na maquina de quem desenvolve); na AWS e o Amazon OpenSearch com acesso
+  # por IAM (infra/cloudformation/opensearch.yaml). Sem volume: o catalog-api recria o
+  # indice a partir do Postgres toda vez que sobe.
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   # ---------- SERVICOS ----------
   users-api:
     build:
@@ -175,12 +194,16 @@ services:
       NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
       NEW_RELIC_APPLICATION_LOGGING_ENABLED: "true"
       NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED: "true"
+      # Busca de jogos (GET /api/v1/games/search) no OpenSearch local acima.
+      Search__Enabled: "true"
+      Search__Endpoint: http://opensearch:9200
     ports:
       - "8082:8080"
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       redis: { condition: service_healthy }
+      opensearch: { condition: service_healthy }
 
   payments-api:
     build:

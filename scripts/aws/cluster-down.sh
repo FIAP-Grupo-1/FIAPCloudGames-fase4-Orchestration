@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Derruba o cluster EKS efemero (stack fcg-eks). A rede (fcg-network) fica: nao cobra
-# por hora e deixa o proximo cluster-up mais rapido.
+# Derruba o cluster EKS efemero (stack fcg-eks) e o OpenSearch da busca (fcg-search).
+# A rede (fcg-network) fica: nao cobra por hora e deixa o proximo cluster-up mais rapido.
 #
 # ----------------------------------------------------------------------
 # POR QUE NAO E SO `delete-stack`
@@ -22,6 +22,7 @@ source "$SCRIPT_DIR/../k8s/common.sh"
 REGION="${AWS_REGION:-us-east-1}"
 EKS_STACK="${EKS_STACK:-fcg-eks}"
 POD_IDENTITY_STACK="${POD_IDENTITY_STACK:-fcg-pod-identity}"
+SEARCH_STACK="${SEARCH_STACK:-fcg-search}"
 CLUSTER_NAME="${CLUSTER_NAME:-fcg}"
 NAMESPACE="fcg"
 
@@ -29,7 +30,14 @@ account="$(aws sts get-caller-identity --query Account --output text)"
 echo "==> Conta AWS: $account (profile: ${AWS_PROFILE:-default}) | regiao: $REGION"
 
 if ! aws cloudformation describe-stacks --stack-name "$EKS_STACK" --region "$REGION" >/dev/null 2>&1; then
-  echo "==> Stack $EKS_STACK nao existe; nada a derrubar."
+  # O OpenSearch pode ter subido sozinho (make search-up) e tambem cobra por hora.
+  if aws cloudformation describe-stacks --stack-name "$SEARCH_STACK" --region "$REGION" >/dev/null 2>&1; then
+    echo "==> Stack $EKS_STACK nao existe; apagando so a $SEARCH_STACK (OpenSearch)"
+    aws cloudformation delete-stack --stack-name "$SEARCH_STACK" --region "$REGION"
+    aws cloudformation wait stack-delete-complete --stack-name "$SEARCH_STACK" --region "$REGION"
+  else
+    echo "==> Stacks $EKS_STACK e $SEARCH_STACK nao existem; nada a derrubar."
+  fi
   exit 0
 fi
 
@@ -51,14 +59,33 @@ else
   echo "==> [2/4] $POD_IDENTITY_STACK nao existe; nada a apagar"
 fi
 
-echo "==> [3/4] Apagando a stack $EKS_STACK - leva de 10 a 15 minutos"
+echo "==> [3/4] Apagando as stacks $EKS_STACK e $SEARCH_STACK (OpenSearch) - leva de 10 a 15 minutos"
+# Independentes: as duas exclusoes correm juntas. delete-stack de stack inexistente
+# nao falha, e o wait volta na hora.
+aws cloudformation delete-stack --stack-name "$SEARCH_STACK" --region "$REGION"
 aws cloudformation delete-stack --stack-name "$EKS_STACK" --region "$REGION"
 aws cloudformation wait stack-delete-complete --stack-name "$EKS_STACK" --region "$REGION"
+aws cloudformation wait stack-delete-complete --stack-name "$SEARCH_STACK" --region "$REGION"
 
 echo "==> [4/4] Procurando sobras que continuariam cobrando"
 leftovers="$(aws resourcegroupstaggingapi get-resources --region "$REGION" \
   --tag-filters "Key=kubernetes.io/cluster/$CLUSTER_NAME,Values=owned" \
   --query 'ResourceTagMappingList[].ResourceARN' --output text)"
+# A API de tags continua listando instancias ja encerradas por um tempo (os nodes
+# acabaram de sair junto com a fcg-eks). Elas nao cobram: so contam as que nao estao
+# terminated.
+if [ -n "$leftovers" ]; then
+  kept=""
+  for arn in $leftovers; do
+    if [[ "$arn" == *":instance/"* ]]; then
+      state="$(aws ec2 describe-instances --region "$REGION" --instance-ids "${arn##*/}" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo terminated)"
+      [[ "$state" == "terminated" || "$state" == "shutting-down" ]] && continue
+    fi
+    kept+="$arn"$'\t'
+  done
+  leftovers="${kept%$'\t'}"
+fi
 volumes="$(aws ec2 describe-volumes --region "$REGION" \
   --filters Name=tag-key,Values=kubernetes.io/created-for/pvc/name Name=status,Values=available \
   --query 'Volumes[].VolumeId' --output text)"

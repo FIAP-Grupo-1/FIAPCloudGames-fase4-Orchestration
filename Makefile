@@ -17,7 +17,7 @@ OIDC_STACK ?= fcg-github-oidc
 SECRETS_STACK ?= fcg-workload-access
 POD_IDENTITY_STACK ?= fcg-pod-identity
 
-.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs cluster-up cluster-down cluster-status secrets-deploy pod-identity-deploy pod-identity-down workloads-deploy zero-downtime-check e2e team-access-deploy
+.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs cluster-up cluster-down cluster-status search-up search-down secrets-deploy pod-identity-deploy pod-identity-down workloads-deploy zero-downtime-check e2e team-access-deploy
 
 help:
 	@echo "Comandos disponiveis:"
@@ -45,6 +45,8 @@ help:
 	@echo "  make cluster-up   - sobe a rede e o cluster EKS efemero (15-20 min, cobrado por hora)"
 	@echo "  make cluster-down - derruba o cluster EKS (limpa LB e volumes antes; a rede fica)"
 	@echo "  make cluster-status - mostra se o cluster esta ligado"
+	@echo "  make search-up    - so o Amazon OpenSearch da busca (stack fcg-search, ~15 min, cobrado por hora; o cluster-up ja sobe)"
+	@echo "  make search-down  - apaga o OpenSearch (o cluster-down ja apaga)"
 
 k8s-start:
 	@echo "==> Iniciando o cluster Minikube"
@@ -154,3 +156,19 @@ cluster-status:
 	@aws cloudformation describe-stacks --stack-name fcg-eks --region $(AWS_REGION) \
 		--query "Stacks[0].[StackName,StackStatus,CreationTime]" --output text 2>/dev/null \
 		|| echo "fcg-eks: desligado"
+
+# OpenSearch sozinho, para testar a busca do catalog-api sem o cluster (API local com
+# Search__UseAwsSigV4=true e AWS_PROFILE). O cluster-up/cluster-down ja cuidam dele.
+SEARCH_STACK ?= fcg-search
+search-up:
+	aws cloudformation deploy \
+		--template-file infra/cloudformation/opensearch.yaml \
+		--stack-name $(SEARCH_STACK) \
+		--region $(AWS_REGION) \
+		--no-fail-on-empty-changeset
+	@aws cloudformation describe-stacks --stack-name $(SEARCH_STACK) --region $(AWS_REGION) \
+		--query "Stacks[0].Outputs[?OutputKey=='Endpoint'].OutputValue" --output text
+
+search-down:
+	aws cloudformation delete-stack --stack-name $(SEARCH_STACK) --region $(AWS_REGION)
+	aws cloudformation wait stack-delete-complete --stack-name $(SEARCH_STACK) --region $(AWS_REGION)

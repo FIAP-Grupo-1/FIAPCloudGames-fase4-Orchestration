@@ -86,7 +86,7 @@ Organização: [FIAP-Grupo-1](https://github.com/FIAP-Grupo-1).
 Pré-requisitos: AWS CLI com o seu usuário `fcg-<nome>`, `kubectl`, `helm` e `make` (no Windows, Git Bash).
 
 ```bash
-make cluster-up          # rede + EKS + Pod Identity + acesso do grupo (15-20 min)
+make cluster-up          # rede + EKS + OpenSearch + Pod Identity + acesso do grupo (15-20 min)
 make workloads-deploy    # External Secrets, Secrets, 7 deployments e o endereço público (NLB)
 make zero-downtime-check # robô acessando o site durante um rolling update: "erros: 0"
 make cluster-down        # derruba tudo que cobra por hora (10-15 min)
@@ -143,8 +143,49 @@ virtuais, e manda as métricas para InfluxDB + Grafana.
 
 ## Busca avançada (OpenSearch)
 
-> _A preencher com a entrega da busca: domínio OpenSearch, indexação no CatalogAPI ao criar e editar
-> jogos, endpoint `/search` com fuzzy e ordenação por relevância, exemplos de chamada._
+A busca de jogos roda num **Amazon OpenSearch** gerenciado, separado do Postgres: o catálogo continua
+lendo e gravando no banco, e o OpenSearch serve só a busca.
+
+| Peça | Onde |
+|---|---|
+| Domínio `fcg-search` (OpenSearch 2.19, 1 nó `t3.small.search`) | `infra/cloudformation/opensearch.yaml`, stack `fcg-search` |
+| Role do catalog-api (`es:ESHttp*` só nesse domínio) | `infra/cloudformation/workload-access.yaml` + `pod-identity.yaml` |
+| Endpoint para o pod (ConfigMap `fcg-search`) | `scripts/aws/deploy-workloads.sh` |
+| Indexação, busca e carga inicial | CatalogAPI, `src/CatalogAPI.Infrastructure/Search/` |
+
+- **Sem senha:** o domínio só aceita requisições assinadas com IAM (SigV4). O catalog-api assina com a role
+  `fcg-eks-catalog-api`, que recebe pelo Pod Identity, então nenhuma credencial existe em código, YAML ou
+  Secret. Sem assinatura, o domínio responde 403.
+- **Sincronização:** criar ou editar um jogo indexa na hora; excluir tira do índice. Se o OpenSearch estiver
+  fora do ar, a escrita no Postgres segue normalmente e o erro vai para o log. Toda vez que o catalog-api
+  sobe, ele recria o índice a partir do Postgres (índice novo + troca de alias, sem deixar a busca vazia
+  durante o rolling update), o que cobre a carga inicial e corrige qualquer jogo que tenha ficado para trás.
+- **Busca:** `GET /api/v1/games/search?q=<termo>&page=1&pageSize=20` (pelo Kong:
+  `/catalog/api/v1/games/search`, com JWT). Consulta `multi_match` em título (peso 3) e descrição, com
+  `fuzziness: AUTO` (1 erro de digitação em termos de 3 a 5 letras, 2 a partir de 6) e acentos ignorados
+  ("pokemon" acha "Pokémon"). O resultado vem ordenado por relevância, com o `score` de cada jogo; jogos
+  desativados não aparecem.
+- **Custo:** o domínio cobra por hora (~US$ 0,04), então é efêmero como o cluster: o `cluster-up` cria em
+  paralelo com o EKS e o `cluster-down` apaga. Para testar só a busca, sem cluster: `make search-up` /
+  `make search-down`.
+
+Exemplo (o jogo é "The Witcher 3: Wild Hunt"; "witchr" tem um erro de digitação):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://$NLB/catalog/api/v1/games/search?q=witchr"
+```
+
+```json
+{ "data": { "query": "witchr", "total": 2, "games": [
+  { "title": "The Witcher 3: Wild Hunt", "genre": "RPG", "score": 3.18 },
+  { "title": "Gwent: The Card Game", "genre": "Strategy", "score": 0.98 } ] } }
+```
+
+O Gwent aparece porque tem "Witcher" na descrição, e fica abaixo porque o título pesa mais.
+
+Localmente, o `docker-compose.yml` sobe um OpenSearch sem o plugin de segurança e liga a busca no catalog-api.
+No Minikube a busca fica desligada (`Search__Enabled` ausente): o catálogo funciona e só o `/search`
+responde 503.
 
 ## Live deploy (roteiro do vídeo)
 

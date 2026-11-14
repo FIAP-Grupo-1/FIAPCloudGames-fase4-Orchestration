@@ -61,6 +61,21 @@ kubectl apply -f k8s/aws/workloads/
 kubectl wait --for=condition=Ready externalsecret/fcg-secrets externalsecret/new-relic \
   -n "$NAMESPACE" --timeout=120s
 
+# Endpoint do Amazon OpenSearch (stack fcg-search, criada pelo cluster-up) para o
+# catalog-api. Sem a stack, o ConfigMap nao e criado e a busca fica desligada.
+search_endpoint="$(aws cloudformation describe-stacks --stack-name "${SEARCH_STACK:-fcg-search}" --region "$REGION" \
+  --query "Stacks[0].Outputs[?OutputKey=='Endpoint'].OutputValue" --output text 2>/dev/null || true)"
+if [[ -n "$search_endpoint" && "$search_endpoint" != "None" ]]; then
+  echo "    busca: $search_endpoint"
+  kubectl create configmap fcg-search -n "$NAMESPACE" \
+    --from-literal=Search__Enabled=true \
+    --from-literal=Search__Endpoint="$search_endpoint" \
+    --from-literal=Search__UseAwsSigV4=true \
+    --dry-run=client -o yaml | kubectl apply -f -
+else
+  echo "   aviso: stack fcg-search nao encontrada; o catalog-api sobe com a busca desligada." >&2
+fi
+
 echo "==> [3/4] Manifestos com imagens do ECR"
 # 1o a maior tag de release v* (nunca expira na lifecycle do ECR). Sem nenhuma, a
 # imagem com tag mais recente (sha-*, expira em 15 dias). O filtro imageDetails[?imageTags]
