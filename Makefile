@@ -17,7 +17,7 @@ OIDC_STACK ?= fcg-github-oidc
 SECRETS_STACK ?= fcg-workload-access
 POD_IDENTITY_STACK ?= fcg-pod-identity
 
-.PHONY: help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs cluster-up cluster-down cluster-status search-up search-down secrets-deploy pod-identity-deploy pod-identity-down workloads-deploy zero-downtime-check e2e team-access-deploy
+.PHONY: seed-demo help k8s-start k8s-build k8s-deploy k8s-up k8s-status k8s-ingress k8s-down kong-config k8s-secrets ecr-deploy ecr-outputs oidc-deploy oidc-outputs cluster-up cluster-down cluster-status search-up search-down secrets-deploy pod-identity-deploy pod-identity-down workloads-deploy zero-downtime-check e2e team-access-deploy
 
 help:
 	@echo "Comandos disponiveis:"
@@ -36,6 +36,7 @@ help:
 	@echo "  make pod-identity-deploy - liga as roles as ServiceAccounts (o cluster-up ja roda)"
 	@echo "  make pod-identity-down   - remove a Pod Identity (o cluster-down ja roda)"
 	@echo "  make workloads-deploy    - sobe ESO, segredos e as APIs no EKS com imagens do ECR"
+	@echo "  make seed-demo          - cadastra ~20 jogos de demonstracao pelo gateway (busca, video)"
 	@echo "  make zero-downtime-check - curl em loop no NLB durante um rollout (ZD_EMAIL/ZD_PASSWORD p/ rota com JWT)"
 	@echo "  make e2e                - teste fim a fim limpo: cluster-up, deploy, testes, zero downtime e cluster-down (KEEP_CLUSTER=1 mantem)"
 	@echo "  make team-access-deploy  - um usuario IAM por integrante, console so com MFA (stack fcg-team-access)"
@@ -112,6 +113,10 @@ workloads-deploy:
 # Prova de zero downtime para o video (ver docs/eks-workloads-e-segredos.md).
 zero-downtime-check:
 	@$(BASH) scripts/aws/zero-downtime-check.sh
+
+# Jogos de demonstracao (ver o cabecalho do script). Idempotente.
+seed-demo:
+	@$(BASH) scripts/seed-demo-games.sh
 
 # Teste fim a fim limpo (sobe, testa e SEMPRE derruba; ver o cabecalho do script).
 e2e:

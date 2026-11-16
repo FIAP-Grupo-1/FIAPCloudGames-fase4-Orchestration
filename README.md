@@ -88,6 +88,7 @@ Pré-requisitos: AWS CLI com o seu usuário `fcg-<nome>`, `kubectl`, `helm` e `m
 ```bash
 make cluster-up          # rede + EKS + OpenSearch + Pod Identity + acesso do grupo (15-20 min)
 make workloads-deploy    # External Secrets, Secrets, 7 deployments e o endereço público (NLB)
+make seed-demo           # ~20 jogos de demonstração (The Witcher, Pokémon, Zelda...) para a busca e o vídeo
 make zero-downtime-check # robô acessando o site durante um rolling update: "erros: 0"
 make cluster-down        # derruba tudo que cobra por hora (10-15 min)
 
@@ -190,8 +191,8 @@ responde 503.
 
 ## Live deploy (roteiro do vídeo)
 
-1. Cluster no ar com `make e2e KEEP_CLUSTER=1`; mostrar o console da AWS (EKS, ECR, Secrets Manager) e
-   `kubectl get pods -n fcg`.
+1. Cluster no ar com `make e2e KEEP_CLUSTER=1` e jogos de demonstração com `make seed-demo`; mostrar o
+   console da AWS (EKS, ECR, Secrets Manager, OpenSearch) e `kubectl get pods -n fcg`.
 2. Em outro terminal, `make zero-downtime-check` acessando o site sem parar.
 3. Alterar algo visível na UsersAPI ou CatalogAPI, abrir o PR e fazer o merge.
 4. Mostrar a pipeline: testes → push no ECR → deploy no EKS (`kubectl rollout status`).
@@ -342,8 +343,10 @@ As três credenciais são fornecidas no documento de entrega, fora do repositór
 
 ### O catálogo nasce vazio
 
-Não há seed de dados: logo após subir, `GET /catalog/api/v1/games` responde `"games":[]`. Isso é
-esperado. Crie alguns jogos antes de testar o fluxo de compra:
+Não há seed automático de jogos: logo após subir, `GET /catalog/api/v1/games` responde `"games":[]`.
+Para ter um catálogo de demonstração (20 jogos, bom para a busca), rode
+`BASE_URL=http://localhost:8000 make seed-demo`: ele entra como o admin raiz (senha `ADMIN_PASSWORD` do
+`.env`) e pula os títulos que já existem. Para criar jogos à mão:
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8000/users/api/auth/login \
