@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net" type="device">
   <diagram id="fcg-aws" name="Infra AWS">
-    <mxGraphModel dx="1600" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1850" pageHeight="1100" math="0" shadow="0">
+    <mxGraphModel dx="1600" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2010" pageHeight="1120" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -14,13 +14,13 @@
           <mxGeometry x="55" y="925" width="50" height="50" as="geometry" />
         </mxCell>
         <mxCell id="gha" value="&lt;b&gt;GitHub Actions&lt;/b&gt;&lt;br&gt;org FIAP-Grupo-1&lt;br&gt;build · push · deploy" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;arcSize=12;fillColor=#24292F;strokeColor=#24292F;fontColor=#FFFFFF;" vertex="1" parent="1">
-          <mxGeometry x="1670" y="400" width="140" height="70" as="geometry" />
+          <mxGeometry x="1830" y="400" width="140" height="70" as="geometry" />
         </mxCell>
         <mxCell id="aws" value="AWS Cloud" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;verticalAlign=top;align=left;spacingLeft=30;dashed=0;grIcon=mxgraph.aws4.group_aws_cloud_alt;strokeColor=#232F3E;fillColor=none;fontColor=#232F3E;dashed=0;" vertex="1" parent="1">
-          <mxGeometry x="200" y="70" width="1420" height="980" as="geometry" />
+          <mxGeometry x="200" y="70" width="1580" height="1000" as="geometry" />
         </mxCell>
         <mxCell id="region" value="us-east-1" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;verticalAlign=top;align=left;spacingLeft=30;dashed=0;grIcon=mxgraph.aws4.group_region;strokeColor=#00A4A6;fillColor=none;fontColor=#147EBA;dashed=1;" vertex="1" parent="aws">
-          <mxGeometry x="20" y="40" width="1380" height="930" as="geometry" />
+          <mxGeometry x="20" y="40" width="1540" height="950" as="geometry" />
         </mxCell>
         <mxCell id="vpc" value="VPC fcg · 10.0.0.0/16" style="points=[];outlineConnect=0;gradientColor=none;html=1;whiteSpace=wrap;fontSize=12;fontStyle=1;container=1;pointerEvents=0;collapsible=0;recursiveResize=0;shape=mxgraph.aws4.group;verticalAlign=top;align=left;spacingLeft=30;dashed=0;grIcon=mxgraph.aws4.group_vpc2;strokeColor=#8C4FFF;fillColor=none;fontColor=#8C4FFF;dashed=0;" vertex="1" parent="region">
           <mxGeometry x="20" y="50" width="920" height="720" as="geometry" />
@@ -124,8 +124,8 @@
         <mxCell id="ddb" value="DynamoDB&lt;br&gt;fcg-notifications" style="outlineConnect=0;fontColor=#232F3E;gradientColor=none;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fillColor=#C925D1;" vertex="1" parent="srv">
           <mxGeometry x="300" y="50" width="44" height="44" as="geometry" />
         </mxCell>
-        <mxCell id="stacks" value="&lt;b&gt;Stacks CloudFormation&lt;/b&gt;&lt;br&gt;&lt;b&gt;fcg-network&lt;/b&gt; · VPC, subnets, IGW, rotas, endpoint S3 — permanente, ~US$ 0&lt;br&gt;&lt;b&gt;fcg-eks&lt;/b&gt; ⏱ · NAT, EKS, node group, access entries — &lt;b&gt;efêmera&lt;/b&gt;: &lt;i&gt;make cluster-up&lt;/i&gt; / &lt;i&gt;make cluster-down&lt;/i&gt;&lt;br&gt;&lt;b&gt;fcg-pod-identity&lt;/b&gt; ⏱ · agente + ServiceAccounts → roles (sobe e desce com o cluster)&lt;br&gt;&lt;b&gt;fcg-workload-access&lt;/b&gt; · segredos fcg/eks/* + roles dos pods · &lt;b&gt;fcg-ecr&lt;/b&gt; · repositórios + lifecycle&lt;br&gt;&lt;b&gt;fcg-github-oidc&lt;/b&gt; · provider + roles do CI · &lt;b&gt;fcg-budget&lt;/b&gt; · alerta US$ 5/mês · &lt;b&gt;fcg-notifications-serverless&lt;/b&gt; · SAM" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;arcSize=12;fillColor=#FFFFFF;strokeColor=#E7157B;align=left;spacingLeft=10;verticalAlign=top;spacingTop=6;fontColor=#232F3E;" vertex="1" parent="region">
-          <mxGeometry x="20" y="790" width="920" height="120" as="geometry" />
+        <mxCell id="stacks" value="&lt;b&gt;Stacks CloudFormation&lt;/b&gt;&lt;br&gt;&lt;b&gt;fcg-network&lt;/b&gt; · VPC, subnets, IGW, rotas, endpoint S3 — permanente, ~US$ 0&lt;br&gt;&lt;b&gt;fcg-eks&lt;/b&gt; ⏱ · NAT, EKS, node group, access entries — &lt;b&gt;efêmera&lt;/b&gt;: &lt;i&gt;make cluster-up&lt;/i&gt; / &lt;i&gt;make cluster-down&lt;/i&gt;&lt;br&gt;&lt;b&gt;fcg-pod-identity&lt;/b&gt; ⏱ · agente + ServiceAccounts → roles (sobe e desce com o cluster)&lt;br&gt;&lt;b&gt;fcg-workload-access&lt;/b&gt; · segredos fcg/eks/* + roles dos pods · &lt;b&gt;fcg-ecr&lt;/b&gt; · repositórios + lifecycle&lt;br&gt;&lt;b&gt;fcg-github-oidc&lt;/b&gt; · provider + roles do CI · &lt;b&gt;fcg-budget&lt;/b&gt; · alerta US$ 5/mês · &lt;b&gt;fcg-notifications-serverless&lt;/b&gt; · SAM&lt;br&gt;&lt;b&gt;fcg-search&lt;/b&gt; ⏱ · Amazon OpenSearch da busca — efêmera, sobe e desce com o cluster · &lt;b&gt;fcg-team-access&lt;/b&gt; · um usuário IAM por integrante (MFA)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;arcSize=12;fillColor=#FFFFFF;strokeColor=#E7157B;align=left;spacingLeft=10;verticalAlign=top;spacingTop=6;fontColor=#232F3E;" vertex="1" parent="region">
+          <mxGeometry x="20" y="790" width="920" height="140" as="geometry" />
         </mxCell>
         <mxCell id="legend" value="&lt;b&gt;⏱&lt;/b&gt; = existe só com o cluster ligado&lt;br&gt;(cobrado por hora; derrubado entre gravações)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;arcSize=12;fillColor=#FFF4E5;strokeColor=#ED7100;fontColor=#232F3E;align=left;spacingLeft=10;" vertex="1" parent="region">
           <mxGeometry x="970" y="790" width="390" height="60" as="geometry" />
@@ -171,6 +171,18 @@
         </mxCell>
         <mxCell id="e18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#545B64;fontSize=11;fontColor=#232F3E;labelBackgroundColor=#FFFFFF;" edge="1" parent="1" source="lambda" target="ddb">
           <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="opensearch" value="&lt;b&gt;Amazon OpenSearch&lt;/b&gt; ⏱&lt;br&gt;fcg-search · busca de jogos&lt;br&gt;fuzzy + relevância&lt;br&gt;acesso só por IAM (SigV4)" style="outlineConnect=0;fontColor=#232F3E;gradientColor=none;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.elasticsearch_service;fillColor=#8C4FFF;" vertex="1" parent="region">
+          <mxGeometry x="1430" y="90" width="56" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="e21" value="busca · indexação · SigV4 (Pod Identity)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#8C4FFF;fontSize=11;fontColor=#232F3E;labelBackgroundColor=#FFFFFF;dashed=1;exitX=1;exitY=0.02;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ng" target="opensearch">
+          <mxGeometry x="0.5" relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1150" y="467" />
+              <mxPoint x="1150" y="170" />
+              <mxPoint x="1678" y="170" />
+            </Array>
+          </mxGeometry>
         </mxCell>
         <mxCell id="e20" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#545B64;fontSize=11;fontColor=#232F3E;labelBackgroundColor=#FFFFFF;dashed=1;exitX=1;exitY=0.94;entryX=0;entryY=0.5;" edge="1" parent="1" source="ng" target="s3ep">
           <mxGeometry relative="1" as="geometry" />
