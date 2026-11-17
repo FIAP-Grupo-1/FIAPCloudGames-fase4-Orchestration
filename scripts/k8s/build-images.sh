@@ -36,10 +36,10 @@ if [ -f "$ROOT_DIR/.env" ]; then
   set +a
 fi
 
-USERS_API_PATH="${USERS_API_PATH:-../FIAPCloudGames-fase3-UsersAPI}"
-CATALOG_API_PATH="${CATALOG_API_PATH:-../FIAPCloudGames-fase3-CatalogAPI}"
-PAYMENTS_API_PATH="${PAYMENTS_API_PATH:-../FIAPCloudGames-fase3-PaymentsAPI}"
-NOTIFICATIONS_API_PATH="${NOTIFICATIONS_API_PATH:-../FIAPCloudGames-fase3-NotificationsAPI}"
+USERS_API_PATH="${USERS_API_PATH:-../FIAPCloudGames-fase4-UsersAPI}"
+CATALOG_API_PATH="${CATALOG_API_PATH:-../FIAPCloudGames-fase4-CatalogAPI}"
+PAYMENTS_API_PATH="${PAYMENTS_API_PATH:-../FIAPCloudGames-fase4-PaymentsAPI}"
+NOTIFICATIONS_API_PATH="${NOTIFICATIONS_API_PATH:-../FIAPCloudGames-fase4-NotificationsAPI}"
 
 cd "$ROOT_DIR"
 

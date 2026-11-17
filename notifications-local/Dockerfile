@@ -13,7 +13,7 @@
 # do repo irmao (solucao + Directory.Build.props):
 #   Compose: build.additional_contexts no docker-compose.yml
 #   k8s:     --build-context no scripts/k8s/build-images.sh
-#   a mao:   docker build --build-context notificationsapi=../FIAPCloudGames-fase3-NotificationsAPI/NotificationsAPI \
+#   a mao:   docker build --build-context notificationsapi=../FIAPCloudGames-fase4-NotificationsAPI/NotificationsAPI \
 #              -t fcg/notifications-lambda:local notifications-local
 #
 # Uma imagem, duas funcoes: o handler e escolhido pelo `command` de cada
