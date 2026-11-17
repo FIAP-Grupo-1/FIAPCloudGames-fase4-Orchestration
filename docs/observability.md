@@ -6,10 +6,10 @@ A solução utiliza New Relic para monitoramento dos microsserviços.
 
 ## Serviços monitorados
 
-- FIAPCloudGames-fase3-UsersAPI
-- FIAPCloudGames-fase3-CatalogAPI
-- FIAPCloudGames-fase3-PaymentsAPI
-- FIAPCloudGames-fase3-NotificationsAPI
+- FIAPCloudGames-fase4-UsersAPI
+- FIAPCloudGames-fase4-CatalogAPI
+- FIAPCloudGames-fase4-PaymentsAPI
+- FIAPCloudGames-fase4-NotificationsAPI
 
 ## APM
 

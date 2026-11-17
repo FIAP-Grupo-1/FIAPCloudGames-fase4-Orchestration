@@ -66,7 +66,7 @@ spec:
             - name: NEW_RELIC_LICENSE_KEY
               valueFrom: { secretKeyRef: { name: new-relic, key: license-key } }
             - name: NEW_RELIC_APP_NAME
-              value: "FIAPCloudGames-fase3-PaymentsAPI"
+              value: "FIAPCloudGames-fase4-PaymentsAPI"
             - name: NEW_RELIC_DISTRIBUTED_TRACING_ENABLED
               value: "true"
             - name: NEW_RELIC_APPLICATION_LOGGING_ENABLED

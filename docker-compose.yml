@@ -32,7 +32,7 @@ x-notifications-lambda: &notifications-lambda
     # nomeado. Assim nada e escrito no repo do NotificationsAPI.
     context: ./notifications-local
     additional_contexts:
-      notificationsapi: ${NOTIFICATIONS_API_PATH:-../FIAPCloudGames-fase3-NotificationsAPI}/NotificationsAPI
+      notificationsapi: ${NOTIFICATIONS_API_PATH:-../FIAPCloudGames-fase4-NotificationsAPI}/NotificationsAPI
   image: fcg/notifications-lambda:local
   environment:
     DynamoDb__ServiceUrl: http://notifications-dynamodb:8000
@@ -125,7 +125,7 @@ services:
   # ---------- SERVICOS ----------
   users-api:
     build:
-      context: ${USERS_API_PATH:-../FIAPCloudGames-fase3-UsersAPI}
+      context: ${USERS_API_PATH:-../FIAPCloudGames-fase4-UsersAPI}
       dockerfile: src/FCG.API/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Production
@@ -154,7 +154,7 @@ services:
       CORECLR_NEWRELIC_HOME: /app/newrelic
       CORECLR_PROFILER_PATH: /app/newrelic/libNewRelicProfiler.so
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
-      NEW_RELIC_APP_NAME: FIAPCloudGames-fase3-UsersAPI
+      NEW_RELIC_APP_NAME: FIAPCloudGames-fase4-UsersAPI
       NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
       NEW_RELIC_APPLICATION_LOGGING_ENABLED: "true"
       NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED: "true"
@@ -166,7 +166,7 @@ services:
 
   catalog-api:
     build:
-      context: ${CATALOG_API_PATH:-../FIAPCloudGames-fase3-CatalogAPI}
+      context: ${CATALOG_API_PATH:-../FIAPCloudGames-fase4-CatalogAPI}
       dockerfile: src/CatalogAPI.API/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Production
@@ -190,7 +190,7 @@ services:
       CORECLR_NEWRELIC_HOME: /app/newrelic
       CORECLR_PROFILER_PATH: /app/newrelic/libNewRelicProfiler.so
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
-      NEW_RELIC_APP_NAME: FIAPCloudGames-fase3-CatalogAPI
+      NEW_RELIC_APP_NAME: FIAPCloudGames-fase4-CatalogAPI
       NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
       NEW_RELIC_APPLICATION_LOGGING_ENABLED: "true"
       NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED: "true"
@@ -207,7 +207,7 @@ services:
 
   payments-api:
     build:
-      context: ${PAYMENTS_API_PATH:-../FIAPCloudGames-fase3-PaymentsAPI}
+      context: ${PAYMENTS_API_PATH:-../FIAPCloudGames-fase4-PaymentsAPI}
       dockerfile: src/FCG.API/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Production
@@ -231,7 +231,7 @@ services:
       CORECLR_NEWRELIC_HOME: /app/newrelic
       CORECLR_PROFILER_PATH: /app/newrelic/libNewRelicProfiler.so
       NEW_RELIC_LICENSE_KEY: ${NEW_RELIC_LICENSE_KEY:-}
-      NEW_RELIC_APP_NAME: FIAPCloudGames-fase3-PaymentsAPI
+      NEW_RELIC_APP_NAME: FIAPCloudGames-fase4-PaymentsAPI
       NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
       NEW_RELIC_APPLICATION_LOGGING_ENABLED: "true"
       NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED: "true"

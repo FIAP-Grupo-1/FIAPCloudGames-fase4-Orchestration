@@ -213,16 +213,16 @@ Repositório de **orquestração** da FIAP Cloud Games (Fase 3). Parte da base d
 
 > **Com pressa?** O gateway responde em `http://localhost:8000` (Docker) ou `http://gateway.fcg.local` (Kubernetes com Ingress). A tabela de [onde chamar o gateway](#onde-chamar-o-gateway) tem a URL base de cada forma de subir o projeto.
 
-> Cada microsserviço vive no seu próprio repositório `FIAPCloudGames-fase3-*`, partindo do código da Fase 2 até que cada frente evolua o serviço correspondente.
+> Cada microsserviço vive no seu próprio repositório `FIAPCloudGames-fase4-*`, partindo do código da Fase 2 até que cada frente evolua o serviço correspondente.
 
 ## Stack escolhida pelo grupo
 
 | Requisito obrigatório | Ferramenta escolhida | Onde vive |
 |---|---|---|
 | API Gateway | Kong | `Orchestration` (manifestos `k8s/`) |
-| Migração para Serverless | AWS Lambda (SNS + SQS) | Repositório próprio `FIAPCloudGames-fase3-NotificationsAPI` |
+| Migração para Serverless | AWS Lambda (SNS + SQS) | Repositório próprio `FIAPCloudGames-fase4-NotificationsAPI` |
 | Observabilidade | New Relic (Opção B: métricas, logs e traces) | `UsersAPI`, `CatalogAPI`, `PaymentsAPI` e a função Lambda |
-| NoSQL | DynamoDB (dados de notificação) | Função Lambda / `FIAPCloudGames-fase3-NotificationsAPI` |
+| NoSQL | DynamoDB (dados de notificação) | Função Lambda / `FIAPCloudGames-fase4-NotificationsAPI` |
 | Cache distribuído | Redis | Microsserviço(s) HTTP |
 
 ## Arquitetura
@@ -238,17 +238,17 @@ Repositório de **orquestração** da FIAP Cloud Games (Fase 3). Parte da base d
 O antigo `notifications-api` (container 24/7 que só consumia eventos do RabbitMQ) foi **migrado para uma função AWS Lambda**, e é assim que ele roda em produção. Localmente, o `docker-compose` e o `k8s` deste repositório rodam o mesmo código no emulador da Lambda, atrás do Kong, só para teste — ver [NotificationsAPI local (via Kong)](#notificationsapi-local-via-kong) e [Serverless (NotificationsAPI)](#serverless-notificationsapi).
 
 Repos dos serviços:
-- users-api: https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-UsersAPI
-- catalog-api: https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-CatalogAPI
-- payments-api: https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-PaymentsAPI
-- notifications (serverless): https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-NotificationsAPI
+- users-api: https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-UsersAPI
+- catalog-api: https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-CatalogAPI
+- payments-api: https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-PaymentsAPI
+- notifications (serverless): https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-NotificationsAPI
 
 > `FiapCloudGames.Contracts` (https://github.com/pdelfino0/fcg-contracts) é o pacote com as classes de evento compartilhadas entre os serviços. É consumido via **NuGet** (`PackageReference` no `.csproj` de cada serviço), **não** precisa ser clonado localmente para rodar o Compose ou o k8s.
 
 ## Estrutura
 
 ```
-FIAPCloudGames-fase3-Orchestration/   # este repo (nome padrão do git clone)
+FIAPCloudGames-fase4-Orchestration/   # este repo (nome padrão do git clone)
 ├── docker-compose.yml   # RabbitMQ + Postgres (2 bancos) + Redis + 3 microsserviços HTTP + Kong
 ├── .env.example         # variáveis do Compose (sem valores reais)
 ├── db/init.sql          # cria catalogdb e paymentsdb
@@ -288,21 +288,21 @@ Clone os **5 repos** na **mesma pasta pai**. O `docker-compose` assume os nomes 
 
 ```
 pasta-pai/
-├── FIAPCloudGames-fase3-Orchestration/   # este repo
-├── FIAPCloudGames-fase3-UsersAPI/
-├── FIAPCloudGames-fase3-CatalogAPI/
-├── FIAPCloudGames-fase3-PaymentsAPI/
-└── FIAPCloudGames-fase3-NotificationsAPI/   # código + IaC da função Lambda (em produção roda na AWS; localmente, no emulador)
+├── FIAPCloudGames-fase4-Orchestration/   # este repo
+├── FIAPCloudGames-fase4-UsersAPI/
+├── FIAPCloudGames-fase4-CatalogAPI/
+├── FIAPCloudGames-fase4-PaymentsAPI/
+└── FIAPCloudGames-fase4-NotificationsAPI/   # código + IaC da função Lambda (em produção roda na AWS; localmente, no emulador)
 ```
 
 ```bash
-mkdir fcg-fase3 && cd fcg-fase3
+mkdir fcg-fase4 && cd fcg-fase4
 
-git clone https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-Orchestration.git
-git clone https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-UsersAPI.git
-git clone https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-CatalogAPI.git
-git clone https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-PaymentsAPI.git
-git clone https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-NotificationsAPI.git
+git clone https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-Orchestration.git
+git clone https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-UsersAPI.git
+git clone https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-CatalogAPI.git
+git clone https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-PaymentsAPI.git
+git clone https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-NotificationsAPI.git
 ```
 
 > Não é preciso clonar `fcg-contracts`: ele é restaurado como pacote NuGet durante o `dotnet restore`/`docker build` de cada serviço.
@@ -314,7 +314,7 @@ git clone https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-No
 Pré-requisito: os repos de serviço devem estar como **irmãos** deste, com os nomes padrão do clone (ou caminhos customizados no `.env`).
 
 ```bash
-cd FIAPCloudGames-fase3-Orchestration
+cd FIAPCloudGames-fase4-Orchestration
 cp .env.example .env        # <- e PREENCHA as credenciais, ver abaixo
 docker-compose up --build
 docker-compose ps           # todos healthy/running; o notifications-dynamodb-init
@@ -956,16 +956,16 @@ minikube start
 **2. Build + carga das 4 imagens no cluster local** (ajuste os caminhos se renomeou as pastas após o clone)
 
 ```bash
-docker build -t fcg/users-api:1.0 ../FIAPCloudGames-fase3-UsersAPI -f ../FIAPCloudGames-fase3-UsersAPI/src/FCG.API/Dockerfile
+docker build -t fcg/users-api:1.0 ../FIAPCloudGames-fase4-UsersAPI -f ../FIAPCloudGames-fase4-UsersAPI/src/FCG.API/Dockerfile
 minikube image load fcg/users-api:1.0
-docker build -t fcg/catalog-api:1.0 ../FIAPCloudGames-fase3-CatalogAPI -f ../FIAPCloudGames-fase3-CatalogAPI/src/CatalogAPI.API/Dockerfile
+docker build -t fcg/catalog-api:1.0 ../FIAPCloudGames-fase4-CatalogAPI -f ../FIAPCloudGames-fase4-CatalogAPI/src/CatalogAPI.API/Dockerfile
 minikube image load fcg/catalog-api:1.0
-docker build -t fcg/payments-api:1.0 ../FIAPCloudGames-fase3-PaymentsAPI -f ../FIAPCloudGames-fase3-PaymentsAPI/src/FCG.API/Dockerfile
+docker build -t fcg/payments-api:1.0 ../FIAPCloudGames-fase4-PaymentsAPI -f ../FIAPCloudGames-fase4-PaymentsAPI/src/FCG.API/Dockerfile
 minikube image load fcg/payments-api:1.0
 
 # NotificationsAPI (só local): o Dockerfile mora neste repo, em notifications-local/,
 # e o código do repo irmão entra no build como contexto nomeado, só leitura
-docker build --build-context notificationsapi=../FIAPCloudGames-fase3-NotificationsAPI/NotificationsAPI \
+docker build --build-context notificationsapi=../FIAPCloudGames-fase4-NotificationsAPI/NotificationsAPI \
   -t fcg/notifications-lambda:1.0 notifications-local
 minikube image load fcg/notifications-lambda:1.0
 ```
@@ -1358,7 +1358,7 @@ O `NotificationsAPI` da Fase 2 (container ASP.NET Core rodando 24/7 no Kubernete
 
 > **Testar sem AWS:** as mesmas funções rodam localmente no emulador da Lambda, atrás do Kong — ver [NotificationsAPI local (via Kong)](#notificationsapi-local-via-kong). Nada disso altera o que está provisionado na AWS.
 
-- **Repositório próprio (código + IaC):** https://github.com/joao-malvetoni-alta-horizon/FIAPCloudGames-fase3-NotificationsAPI
+- **Repositório próprio (código + IaC):** https://github.com/FIAP-Grupo-1/FIAPCloudGames-fase4-NotificationsAPI
 - **Infraestrutura como código:** AWS SAM (`template.yaml` na raiz daquele repositório).
 - **Arquitetura:** `UsersAPI`/`PaymentsAPI` publicam `UserRegisteredEvent`/`PaymentProcessedEvent` num tópico **SNS**, que entrega numa fila **SQS** (com DLQ), que aciona a **Lambda** correspondente — sem nenhum componente rodando continuamente.
 - **Persistência:** DynamoDB (`fcg-notifications`), atendendo também o requisito obrigatório de NoSQL.
@@ -1428,7 +1428,7 @@ As funções **locais** do NotificationsAPI não usam ConfigMap nem Secret: os v
 | `AWS_REGION` | `us-east-1` | idem |
 | `NEW_RELIC_LICENSE_KEY` | `local-dev-placeholder` | o `Telemetry.cs` aborta a função sem ela; com o placeholder os traces são recusados, sem afetar a execução |
 
-No `.env`, `NOTIFICATIONS_API_PATH` diz onde está o repo do NotificationsAPI (default `../FIAPCloudGames-fase3-NotificationsAPI`), como `USERS_API_PATH` e os demais.
+No `.env`, `NOTIFICATIONS_API_PATH` diz onde está o repo do NotificationsAPI (default `../FIAPCloudGames-fase4-NotificationsAPI`), como `USERS_API_PATH` e os demais.
 
 > **Secret** é apenas base64 (não é cofre). Não comite valores reais.
 
